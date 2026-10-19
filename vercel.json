@@ -5,5 +5,8 @@
       "maxDuration": 60,
       "excludeFiles": "{android/**,tests/**,scripts/**,supabase/**,cloud/**,.github/**,.git/**,data/**,*.md,*.txt,*.zip,*.apk}"
     }
-  }
+  },
+  "regions": [
+    "bom1"
+  ]
 }
