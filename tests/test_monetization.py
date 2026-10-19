@@ -72,10 +72,13 @@ class MonetizationTests(unittest.TestCase):
         with app.connection() as c:self.assertEqual(c.execute('SELECT count(*) FROM cards WHERE tenant_id=?',(self.tenant,)).fetchone()[0],2)
     def test_operator_requires_separate_grant_and_mfa(self):
         self.assertEqual(self.client.get('/super-admin').status_code,404);self.assertEqual(self.client.get('/api/platform/overview').status_code,404)
-        secret=self.platform();self.assertEqual(self.client.get('/super-admin').status_code,200);self.assertEqual(self.client.get('/api/platform/overview').status_code,200)
+        secret=self.platform()
+        with app.connection() as c:consumed=c.execute('SELECT last_counter FROM platform_security WHERE account_id=?',(self.aid,)).fetchone()[0]
+        replayed_code=security.totp(secret,consumed*30)
+        self.assertEqual(self.client.get('/super-admin').status_code,200);self.assertEqual(self.client.get('/api/platform/overview').status_code,200)
         self.assertEqual(self.other.get('/api/platform/overview').status_code,404)
         self.client.post('/api/platform/logout',json={});self.assertEqual(self.client.get('/api/platform/overview').status_code,404)
-        self.assertEqual(self.client.post('/api/platform/elevate',json={'password':self.password,'code':security.totp(secret)}).status_code,403)
+        self.assertEqual(self.client.post('/api/platform/elevate',json={'password':self.password,'code':replayed_code}).status_code,403)
     def test_grant_suspend_support_and_append_only_audit(self):
         self.platform();target=self.otherstate['organization']['id'];url='/api/platform/tenants/'+target
         r=self.client.post(url+'/override',json={'plan_id':'enterprise','days':30,'limits':{'max_cards':25},'reason':'Offline enterprise access'});self.assertEqual(r.status_code,200,r.json)
