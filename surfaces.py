@@ -54,7 +54,7 @@ def serve(app,h,c,method,path):
         if canonical=='/login' and not h.query().get('challenge'):
             try:
                 h.actor(c);next_path=h.query().get('next',['/dashboard'])[0]
-                if next_path not in ('/dashboard','/dashboard/cards','/dashboard/leads','/dashboard/settings','/dashboard/team','/dashboard/templates','/dashboard/analytics','/dashboard/nfc'):next_path='/dashboard'
+                if next_path not in ('/dashboard','/dashboard/cards','/dashboard/leads','/dashboard/settings','/dashboard/team','/dashboard/templates','/dashboard/analytics','/dashboard/nfc','/dashboard/billing'):next_path='/dashboard'
                 h.send(302,b'','text/plain',{'Location':prefix+next_path});return True,None
             except app.Problem as e:
                 if e.code not in (401,403):raise

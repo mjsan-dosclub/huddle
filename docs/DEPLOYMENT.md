@@ -87,3 +87,8 @@ The repository was tested locally with PostgreSQL, SQLite and a real browser. Su
 - [Vercel Function limits](https://vercel.com/docs/functions/limitations)
 - [Supabase PostgreSQL connections](https://supabase.com/docs/guides/database/connecting-to-postgres)
 - [Supabase Storage](https://supabase.com/docs/guides/storage)
+
+
+## HUDDLE 0.7 rollout
+
+See [MONETIZATION.md](MONETIZATION.md) before deploying the monetization release. Apply migration 3 before code rollout, provision the designated founder account separately, and enroll platform MFA. Razorpay remains disabled until credentials and plan mappings are configured. Resend remains deferred.

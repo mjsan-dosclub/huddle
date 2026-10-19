@@ -25,6 +25,10 @@ class TenancyTests(unittest.TestCase):
         try:r=urllib.request.urlopen(req)
         except urllib.error.HTTPError as e:r=e
         raw=r.read();body=json.loads(raw) if 'application/json' in r.headers.get('Content-Type','') else raw
+        if path=='/api/register' and r.status==200:
+            with app.connection() as c:
+                tenant=c.execute('SELECT u.tenant_id FROM users u JOIN accounts a ON a.id=u.account_id WHERE a.email=?',(data['email'],)).fetchone()[0]
+                c.execute('INSERT INTO entitlement_overrides VALUES(?,?,?,?,?,?,?,?,?)',(app.uid(),tenant,'enterprise','{}','Paid regression fixture','test',app.now(),app.now()+86400,None))
         return r.status,body,r.headers.get('Set-Cookie','').split(';')[0]
     def test_01_state_and_org_switch_boundaries(self):
         self.assertNotEqual(self.sa['organization']['id'],self.sb['organization']['id'])

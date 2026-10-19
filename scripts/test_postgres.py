@@ -98,6 +98,81 @@ class PostgresDeploymentTests(unittest.TestCase):
         self.assertTrue(all(r.status_code in (200,403,409) for r in responses))
         self.assertEqual(sum('hello_session=' in r.headers.get('Set-Cookie','') for r in responses),1)
 
+
+    def billing_owner(self):
+        client=deployment.app.test_client();address='billing.'+secrets.token_hex(6)+'@example.com'
+        self.assertEqual(client.post('/api/register',json={'email':address,'password':'BillingPg!2026','organization':'Billing PostgreSQL'}).status_code,200)
+        state=client.get('/api/state').json
+        return client,address,state
+    def test_concurrent_quota_requests_cannot_overallocate_cards(self):
+        from concurrent.futures import ThreadPoolExecutor
+        import billing
+        client,address,state=self.billing_owner();tenant=state['organization']['id']
+        with fixtures.app.connection() as c:c.execute('INSERT INTO entitlement_overrides VALUES(?,?,?,?,?,?,?,?,?)',(fixtures.app.uid(),tenant,'pro','{}','Concurrency test grant','test',fixtures.app.now(),fixtures.app.now()+86400,None))
+        cookie=client.get_cookie('hello_session').value
+        def create(i):
+            request=deployment.app.test_client();request.set_cookie('hello_session',cookie)
+            r=request.post('/api/cards',json={'persona':'Race '+str(i)});return (r.status_code,r.json)
+        with ThreadPoolExecutor(max_workers=12) as pool:results=list(pool.map(create,range(18)))
+        self.assertTrue(all(x[0] in (200,402,409) for x in results),results)
+        with fixtures.app.connection() as c:self.assertLessEqual(billing.usage(fixtures.app,c,tenant)['cards'],10)
+        # Retry serialization conflicts sequentially; exactly ten total cards fit.
+        for i in range(12):client.post('/api/cards',json={'persona':'Retry '+str(i)})
+        with fixtures.app.connection() as c:self.assertEqual(billing.usage(fixtures.app,c,tenant)['cards'],10)
+        self.assertEqual(client.post('/api/invitations',json={'email':'reserved@example.com','name':'Reserved'}).status_code,402)
+    def test_platform_grants_cannot_be_self_assigned_and_audit_is_append_only(self):
+        import security,psycopg
+        client,address,state=self.billing_owner()
+        with fixtures.app.connection() as c:aid=c.execute('SELECT account_id FROM users WHERE tenant_id=?',(state['organization']['id'],)).fetchone()[0]
+        with self.assertRaises(Exception):
+            with fixtures.app.connection() as c:c.execute('INSERT INTO platform_admin_grants VALUES(?,?,?,?)',(aid,fixtures.app.now(),'attack','Tenant cannot self assign'))
+        self.assertEqual(client.get('/api/platform/overview').status_code,404)
+        with psycopg.connect(url) as admin:admin.execute('INSERT INTO huddle.platform_admin_grants VALUES(%s,%s,%s,%s)',(aid,fixtures.app.now(),'test','Controlled test provision'))
+        setup=client.post('/api/platform/mfa/setup',json={'password':'BillingPg!2026'});self.assertEqual(setup.status_code,200,setup.json)
+        result=client.post('/api/platform/mfa/confirm',json={'password':'BillingPg!2026','code':security.totp(setup.json['secret'])});self.assertEqual(result.status_code,200,result.json)
+        self.assertEqual(client.get('/api/platform/overview').status_code,200)
+        with self.assertRaises(Exception):
+            with fixtures.app.connection() as c:c.execute('DELETE FROM platform_audit')
+        with psycopg.connect(url,autocommit=True) as admin:
+            if not admin.execute("SELECT 1 FROM pg_roles WHERE rolname='huddle_browser_probe'").fetchone():admin.execute('CREATE ROLE huddle_browser_probe NOLOGIN')
+        for table in ('platform_admin_grants','subscriptions','payments','billing_events','platform_audit'):
+            with psycopg.connect(url,autocommit=True) as admin:
+                admin.execute('SET ROLE huddle_browser_probe')
+                with self.assertRaises(psycopg.errors.InsufficientPrivilege):admin.execute('SELECT * FROM huddle.'+table)
+    def test_billing_webhook_uses_transactional_deduplication(self):
+        import billing,hashlib,hmac,json
+        from unittest.mock import patch
+        client,address,state=self.billing_owner();tenant=state['organization']['id'];sid=fixtures.app.uid()
+        with fixtures.app.connection() as c:c.execute('INSERT INTO subscriptions(id,tenant_id,plan_id,price_id,status,mode,provider_subscription_id,created,updated) VALUES(?,?,?,?,?,?,?,?,?)',(sid,tenant,'pro','pro-monthly','AUTHENTICATED','test','sub_'+sid,fixtures.app.now(),fixtures.app.now()))
+        entity={'id':'sub_'+sid,'status':'active','plan_id':'plan_fixture','current_end':fixtures.app.now()+86400,'notes':{'huddle_tenant_id':tenant,'huddle_subscription_id':sid}}
+        raw=json.dumps({'event':'subscription.activated','payload':{'subscription':{'entity':entity}}}).encode();secret='pg-fixture-webhook';signature=hmac.new(secret.encode(),raw,hashlib.sha256).hexdigest();eid='pg-event-'+secrets.token_hex(4)
+        env={'RAZORPAY_MODE':'test','RAZORPAY_KEY_ID':'rzp_test_fixture','RAZORPAY_KEY_SECRET':'fixture','RAZORPAY_WEBHOOK_SECRET':secret,'RAZORPAY_PLAN_PRO_MONTHLY':'plan_fixture'}
+        with patch.dict(os.environ,env),patch.object(billing,'gateway',return_value=entity):
+            a=client.post('/api/webhooks/razorpay',data=raw,content_type='application/json',headers={'X-Razorpay-Signature':signature,'X-Razorpay-Event-Id':eid});self.assertEqual(a.status_code,200,a.json)
+            b=client.post('/api/webhooks/razorpay',data=raw,content_type='application/json',headers={'X-Razorpay-Signature':signature,'X-Razorpay-Event-Id':eid});self.assertTrue(b.json['duplicate'])
+            self.assertEqual(client.get('/api/billing').json['plan'],'pro')
+        with fixtures.app.connection() as c:self.assertEqual(c.execute('SELECT count(*) FROM billing_events WHERE provider_event_id=?',(eid,)).fetchone()[0],1)
+
+    def test_upgrade_backfills_existing_tenant_without_granting_platform_access(self):
+        import hashlib
+        from psycopg import sql
+        dbname='huddle_upgrade_'+secrets.token_hex(5);info=conninfo_to_dict(url);info['dbname']=dbname;target=make_conninfo(**info)
+        with psycopg.connect(url,autocommit=True) as admin:admin.execute(sql.SQL('CREATE DATABASE {}').format(sql.Identifier(dbname)))
+        try:
+            with psycopg.connect(target) as c:
+                c.execute('CREATE SCHEMA huddle');c.execute('CREATE TABLE huddle.deployment_migrations(version TEXT PRIMARY KEY,sha256 TEXT NOT NULL,applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())')
+                for path in sorted((root/'supabase/migrations').glob('*.sql'))[:2]:
+                    source=path.read_text();c.execute(source,prepare=False);c.execute('INSERT INTO huddle.deployment_migrations(version,sha256) VALUES(%s,%s)',(path.stem,hashlib.sha256(source.encode()).hexdigest()))
+                c.execute("INSERT INTO huddle.organizations VALUES('legacy-org','Preserved Company','preserved-company','active','{}',1)")
+            apply(target);apply(target)
+            with psycopg.connect(target) as c:
+                self.assertEqual(c.execute('SELECT name FROM huddle.organizations').fetchone()[0],'Preserved Company')
+                self.assertEqual(c.execute('SELECT count(*) FROM huddle.entitlement_overrides').fetchone()[0],1)
+                self.assertEqual(c.execute('SELECT count(*) FROM huddle.platform_admin_grants').fetchone()[0],0)
+                self.assertEqual(c.execute('SELECT count(*) FROM huddle.platform_audit').fetchone()[0],1)
+        finally:
+            with psycopg.connect(url,autocommit=True) as admin:admin.execute(sql.SQL('DROP DATABASE {} WITH (FORCE)').format(sql.Identifier(dbname)))
+
 classes=[fixtures.TenancyTests,security_tests.SurfaceSecurityTests]
 total=0;failed=False
 for cls in classes:
