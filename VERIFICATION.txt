@@ -1,0 +1,22 @@
+HUDDLE 0.6.1 deployment preparation — 2026-10-19
+
+PASSED LOCALLY
+- 39 SQLite regression/deployment-adapter tests.
+- 35 tests against real disposable PostgreSQL 17 through the production WSGI entrypoint.
+- PostgreSQL checks include tenant/member boundaries, MFA/concurrent one-use recovery,
+  shared rate limits, non-admin runtime credentials and anonymous table-access denial.
+- Synthetic SQLite import preserves public handles, NFC tokens, encrypted MFA and
+  asset visibility; dry-run leaves source unchanged; nonempty destinations are rejected.
+- 14 desktop/mobile browser workflows against Flask + PostgreSQL; zero page errors.
+- Android 0.6.1 compiles; APK signature verification passed with the prior test key.
+- No live user database, environment secrets, MFA encryption key or signing key included.
+
+NOT VERIFIED ON CLOUD (projects do not exist yet)
+- Actual Vercel builder/runtime and production URL.
+- Supabase-managed transaction pooler, Storage API and project-specific grants.
+- DNS, HTTPS, live Google OAuth, verified Resend delivery and physical NFC hardware.
+- Native Android behavior was verified on 0.6.0 in the previous release; 0.6.1 only
+  changes its version, portable build paths and client-side image size limit.
+
+Cloud setup and acceptance: docs/DEPLOYMENT.md.
+Existing local demo remains separate and unchanged.

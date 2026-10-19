@@ -1,0 +1,2 @@
+-- Superseded. Apply the versioned files in supabase/migrations with scripts/db_migrate.py.
+-- The existing API owns authentication; no Supabase Auth mapping is required.
