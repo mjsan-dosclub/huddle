@@ -66,6 +66,7 @@ class PostgresDeploymentTests(unittest.TestCase):
                     self.assertEqual(c.execute('SELECT secret FROM huddle.user_security').fetchone()[0],secret)
                     self.assertEqual(c.execute('SELECT visibility FROM huddle.assets').fetchone()[0],'private')
                     self.assertEqual(c.execute('SELECT count(*) FROM huddle.sessions').fetchone()[0],0)
+                    self.assertEqual(c.execute('SELECT plan_id FROM huddle.entitlement_overrides WHERE tenant_id=%s',(tenant,)).fetchone()[0],'enterprise')
         finally:
             fixtures.app.DATA,fixtures.app.DB=original_data,original_db
             with psycopg.connect(url,autocommit=True) as admin:admin.execute(sql.SQL('DROP DATABASE {} WITH (FORCE)').format(sql.Identifier(dbname)))

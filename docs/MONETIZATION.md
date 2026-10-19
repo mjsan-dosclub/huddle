@@ -96,3 +96,5 @@ Controlled recovery: `scripts/platform_admin.py --email ... --reason 'Verified o
 Real Razorpay test-account checkout/webhook delivery has not been exercised without credentials; transport and transitions are covered by fixtures. GST tax invoices, taxes/credit notes/refund accounting, automated offline contract renewal, full plan-change proration, Wallet signing, CRM sync, SAML/SCIM, geofencing, Events, and renewal-failure emails are not implemented. Payment CSVs are receipts, not GST invoices. Live collection is not enabled.
 
 Provider references: https://razorpay.com/docs/webhooks/validate-test/ ; https://razorpay.com/docs/api/payments/subscriptions/create-subscription/ ; https://razorpay.com/docs/webhooks/subscriptions/
+
+Legacy SQLite imports receive the same 90-day access preservation after import. Sources containing trial/payment/subscription history are rejected by the legacy importer; use a dedicated financial-data migration rather than silently dropping that history. Platform grants and authenticator enrollment are not imported by that legacy tool.

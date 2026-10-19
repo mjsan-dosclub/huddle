@@ -38,7 +38,7 @@ def verify(app,c,account,code,pending=False):
 
 def metrics(app,c):
     # MRR is contracted, current recurring revenue; trial/test/manual access is excluded.
-    stamp=app.now();subs=c.execute("SELECT s.*,p.amount_paise,p.interval FROM subscriptions s JOIN plan_prices p ON p.id=s.price_id JOIN organizations o ON o.id=s.tenant_id WHERE s.mode IN ('live','offline') AND s.status='ACTIVE' AND s.current_period_end>? AND o.status='active'",(stamp,)).fetchall()
+    stamp=app.now();subs=c.execute("SELECT s.*,p.amount_paise,p.interval FROM subscriptions s JOIN plan_prices p ON p.id=s.price_id JOIN organizations o ON o.id=s.tenant_id WHERE s.mode IN ('live','offline') AND s.status='ACTIVE' AND s.current_period_end>?",(stamp,)).fetchall()
     mrr=sum(r['amount_paise']/12 if r['interval']=='annual' else r['amount_paise'] for r in subs)
     trials=c.execute("SELECT count(DISTINCT tenant_id) FROM subscriptions WHERE status='TRIALING'").fetchone()[0]
     converted=c.execute("SELECT count(DISTINCT s.tenant_id) FROM subscriptions s WHERE s.mode IN ('live','offline') AND s.status='ACTIVE' AND s.current_period_end>? AND EXISTS(SELECT 1 FROM subscriptions t WHERE t.tenant_id=s.tenant_id AND t.status='TRIALING')",(stamp,)).fetchone()[0]
@@ -140,7 +140,7 @@ def route(app,h,c,method,path):
         if action=='offline-payment':
             price=c.execute('SELECT * FROM plan_prices WHERE id=? AND active=1',(d.get('price_id'),)).fetchone();reference=app.text(d.get('reference'),200)
             if not price or not reference:raise app.Problem('Select a price and enter a unique bank/payment reference.')
-            if c.execute("SELECT 1 FROM subscriptions WHERE tenant_id=? AND mode='offline' AND status='ACTIVE' AND current_period_end>?",(tenant,app.now())).fetchone():raise app.Problem('An active offline contract already exists.',409)
+            if c.execute("SELECT 1 FROM subscriptions WHERE tenant_id=? AND mode IN ('live','offline') AND status='ACTIVE' AND current_period_end>?",(tenant,app.now())).fetchone():raise app.Problem('An active offline contract already exists.',409)
             sid=app.uid();end=app.now()+(365 if price['interval']=='annual' else 30)*86400
             c.execute('INSERT INTO subscriptions(id,tenant_id,plan_id,price_id,status,mode,current_period_end,created,updated) VALUES(?,?,?,?,?,?,?,?,?)',(sid,tenant,price['plan_id'],price['id'],'ACTIVE','offline',end,app.now(),app.now()))
             c.execute('INSERT INTO payments VALUES(?,?,?,?,?,?,?,?,?,?)',(app.uid(),tenant,sid,'offline',reference,price['amount_paise'],'INR','captured',app.now(),reference));audit(app,c,aid,'billing.offline_payment_recorded',tenant,reason,{'reference':reference,'amount_paise':price['amount_paise']});return True,{'ok':True}

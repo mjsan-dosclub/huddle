@@ -17,6 +17,7 @@ def run(source,apply=False):
         c=sqlite3.connect(Path(folder)/'snapshot.sqlite3');original.backup(c);original.close();c.row_factory=sqlite3.Row
         if c.execute('PRAGMA foreign_key_check').fetchall():raise RuntimeError('Source contains invalid relationships')
         if not c.execute('SELECT 1 FROM schema_migrations WHERE version=2').fetchone():raise RuntimeError('Upgrade the local source to schema 2 first')
+        if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='subscriptions'").fetchone() and c.execute("SELECT 1 FROM subscriptions WHERE status!='FREE' OR mode!='none' LIMIT 1").fetchone():raise RuntimeError('This source contains billing history. Use a dedicated financial-data migration; the legacy importer will not discard it.')
         counts={table:c.execute('SELECT count(*) FROM '+table).fetchone()[0] for table in TABLES}
         if not apply:
             print(json.dumps({'mode':'dry-run','rows':counts,'source_changed':False,'destination_changed':False}));return
@@ -39,6 +40,14 @@ def run(source,apply=False):
                     columns=list(row.keys())
                     query=sql.SQL('INSERT INTO {} ({}) VALUES ({})').format(sql.Identifier(table),sql.SQL(',').join(map(sql.Identifier,columns)),sql.SQL(',').join(sql.Placeholder() for _ in columns))
                     dest.execute(query,tuple(row))
+            # Imports occur after schema deployment, so explicitly preserve legacy access.
+            import time,secrets
+            stamp=int(time.time())
+            for org in c.execute('SELECT id FROM organizations'):
+                tenant=org['id']
+                dest.execute("INSERT INTO subscriptions(id,tenant_id,plan_id,status,mode,created,updated) VALUES(%s,%s,'free','FREE','none',%s,%s)",('import-sub-'+tenant,tenant,stamp,stamp))
+                dest.execute("INSERT INTO entitlement_overrides VALUES(%s,%s,'enterprise','{}',%s,'legacy-import',%s,%s,NULL)",('import-grant-'+tenant,tenant,'90-day compatibility grant for legacy SQLite import',stamp,stamp+90*86400))
+                dest.execute("INSERT INTO platform_audit VALUES(%s,'legacy-import',%s,'tenant.compatibility_grant',%s,'{}',%s)",('import-audit-'+tenant,tenant,'Legacy SQLite import with 90-day access grant',stamp))
             for table in ('audit','activity'):
                 dest.execute(sql.SQL("SELECT setval(pg_get_serial_sequence({},'id'),COALESCE(MAX(id),1),COUNT(*)>0) FROM {}").format(sql.Literal('huddle.'+table),sql.Identifier(table)))
             for row in assets:object_storage.request('POST',row['storage_key'],(source.parent/row['storage_key'].lstrip('/')).read_bytes())

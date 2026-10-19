@@ -79,6 +79,7 @@ def checkout(app,h,c,actor,d):
     provider_plan=os.environ.get(key,'')
     if not gateway_id(provider_plan,'plan'):raise app.Problem('This billing price needs a Razorpay plan mapping.',503)
     c.execute('UPDATE organizations SET status=status WHERE id=?',(tenant,))
+    if c.execute("SELECT 1 FROM subscriptions WHERE tenant_id=? AND mode='offline' AND status='ACTIVE' AND current_period_end>?",(tenant,app.now())).fetchone():raise app.Problem('An active offline contract already covers this organization. Contact the platform owner to change billing.',409)
     current=c.execute("SELECT * FROM subscriptions WHERE tenant_id=? AND mode=? AND provider_subscription_id IS NOT NULL AND status NOT IN ('CANCELED','COMPLETED') ORDER BY created DESC LIMIT 1",(tenant,mode())).fetchone()
     if current:
         if current['status']=='AUTHENTICATED' and current['price_id']==price['id']:
