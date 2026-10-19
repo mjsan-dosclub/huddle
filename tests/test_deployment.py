@@ -7,6 +7,25 @@ import database,object_storage
 from app import app,configuration_errors
 
 class DeploymentTests(unittest.TestCase):
+    def test_development_http_response_waits_for_commit_and_discards_failed_cookie(self):
+        import server
+        from contextlib import contextmanager
+        from unittest.mock import MagicMock
+        for fail in (False,True):
+            committed=False;events=[];headers=[]
+            @contextmanager
+            def connection():
+                nonlocal committed
+                yield MagicMock()
+                if fail:raise RuntimeError('Fixture commit failure')
+                committed=True
+            def route(handler,c,method,path):handler.send(200,{'ok':True},headers={'Set-Cookie':'hello_session=fixture'})
+            handler=server.Handler.__new__(server.Handler);handler.path='/';handler.headers={};handler.wfile=io.BytesIO()
+            handler.send_response=lambda status:events.append((status,committed))
+            handler.send_header=lambda key,value:headers.append((key,value));handler.end_headers=lambda:None
+            with patch.dict(os.environ,{},clear=True),patch.object(server,'connection',connection),patch.object(server.Handler,'route',route):handler.handle_safe('GET')
+            self.assertEqual(events,[(500,False)] if fail else [(200,True)])
+            self.assertEqual(any(key=='Set-Cookie' for key,value in headers),not fail)
     def test_vercel_cannot_fall_back_to_local_database_or_encryption_key(self):
         with patch.dict(os.environ,{'VERCEL':'1'},clear=True):
             self.assertIn('DATABASE_URL',configuration_errors())

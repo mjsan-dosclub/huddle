@@ -1,7 +1,7 @@
 HUDDLE 0.6.1 deployment preparation — 2026-10-19
 
 PASSED LOCALLY
-- 39 SQLite regression/deployment-adapter tests.
+- 40 SQLite regression/deployment-adapter tests.
 - 35 tests against real disposable PostgreSQL 17 through the production WSGI entrypoint.
 - PostgreSQL checks include tenant/member boundaries, MFA/concurrent one-use recovery,
   shared rate limits, non-admin runtime credentials and anonymous table-access denial.

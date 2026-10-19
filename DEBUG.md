@@ -1,5 +1,7 @@
 # Deployment debug checklist
 
+The development HTTP handler now buffers all responses until the database commit completes. A failed commit discards any pending success/session cookie, matching the production WSGI handler.
+
 - Missing configuration: inspect Vercel environment variable names, then redeploy. Values are intentionally never echoed by preflight.
 - Database unavailable: verify the dedicated backend username, encoded password, pooler host, TLS and applied migrations. Use session pooler for migrations, transaction pooler for runtime.
 - Images unavailable: verify the private Storage bucket and server-side service-role key. Unpublished images need an authenticated session in the same organization.

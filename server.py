@@ -247,6 +247,8 @@ class Handler(BaseHTTPRequestHandler):
         if args and isinstance(args[0],str):args=(args[0].split('?')[0],)+args[1:]
         super().log_message(fmt,*args)
     def send(self,status,content,mime='application/json',headers=None):
+        if getattr(self,'_defer_response',False):
+            self._pending_response=(status,content,mime,headers);return
         raw=dump(content).encode() if mime=='application/json' or mime.endswith('+json') else content.encode() if isinstance(content,str) else content
         self.send_response(status);self.send_header('Content-Type',mime);self.send_header('Content-Length',str(len(raw)));self.send_header('Cache-Control','no-store');self.send_header('X-Content-Type-Options','nosniff');self.send_header('Referrer-Policy','no-referrer')
         self.send_header('Content-Security-Policy',"default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
@@ -286,6 +288,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_PUT(self):self.handle_safe('PUT')
     def do_DELETE(self):self.handle_safe('DELETE')
     def handle_safe(self,method):
+        self._defer_response=True;self._pending_response=None
         try:
             path=urllib.parse.urlsplit(self.path).path
             if method!='GET':
@@ -301,6 +304,9 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             if database.retryable(e):self.send(409,{'error':'Another update completed at the same time. Please retry.'});return
             print('Request failed:',type(e).__name__,flush=True);self.send(500,{'error':'The request could not be completed.'})
+        finally:
+            self._defer_response=False
+            if self._pending_response is not None:self.send(*self._pending_response)
     def query(self):return urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
     def route(self,c,method,path):
         matched,result=security.handle(sys.modules[__name__],self,c,method,path)
