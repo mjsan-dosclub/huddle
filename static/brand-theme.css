@@ -1,0 +1,3 @@
+/* Shared HUDDLE identity for marketing, authentication and workspaces. */
+@font-face{font-family:Inter;src:url('/static/fonts/inter-variable.woff2') format('woff2');font-weight:100 900;font-style:normal;font-display:swap}
+:root{--huddle-red:#df171c;--huddle-red-hover:#bd1116;--huddle-red-soft:#fff0ed;--huddle-ink:#191919;--huddle-muted:#685f5c;--huddle-line:#e9deda;--huddle-paper:#fafafa;--huddle-hero:linear-gradient(115deg,#fff7db 0%,#fff0e5 53%,#ffe9e9 100%)}
