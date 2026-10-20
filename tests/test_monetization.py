@@ -100,6 +100,31 @@ class MonetizationTests(unittest.TestCase):
         migrate.apply(app)
         self.assertIsNone(self.client.get('/api/organizations').json['ownership']['limit'])
         for i in range(3):self.assertEqual(self.client.post('/api/organizations',json={'name':'Personal '+str(i)}).status_code,200)
+    def test_audit_table_paging_filters_and_human_labels_preserve_old_records(self):
+        self.platform();target=self.otherstate['organization']['id']
+        with app.connection() as c:
+            for i in range(70):
+                c.execute('INSERT INTO platform_audit VALUES(?,?,?,?,?,?,?)',(app.uid(),self.aid,target,'package.updated','Readable audit fixture '+str(i),'{}',app.now()-(14*86400 if i<45 else 0)))
+        entries=[]
+        for page,size in [(0,25),(1,25),(2,20)]:
+            r=self.client.get('/api/platform/audit?q=Readable+audit+fixture&page='+str(page)).json
+            self.assertEqual(len(r['entries']),size);self.assertEqual(r['total'],70);self.assertEqual(r['has_more'],page<2)
+            self.assertFalse(r['auto_delete']);entries+=r['entries']
+        self.assertEqual(len({e['id'] for e in entries}),70)
+        self.assertTrue(all(e['action_label']=='Package updated' and e['actor_email']==self.email and e['organization_name']=='Company' for e in entries))
+        recent=self.client.get('/api/platform/audit?q=Readable+audit+fixture&days=7').json
+        self.assertEqual(recent['total'],25)
+        human_search=self.client.get('/api/platform/audit?q=Package+updated').json
+        self.assertEqual(human_search['total'],70)
+        with app.connection() as c:self.assertEqual(c.execute("SELECT count(*) FROM platform_audit WHERE reason LIKE 'Readable audit fixture%' ").fetchone()[0],70)
+        self.assertEqual(self.other.get('/api/platform/audit').status_code,404)
+        self.assertEqual(self.client.get('/api/platform/audit?days=invalid').status_code,400)
+    def test_organization_roster_has_real_pagination_totals_and_dedicated_routes(self):
+        self.platform();r=self.client.get('/api/platform/tenants?q=Company').json
+        self.assertEqual(r['total'],2);self.assertEqual(r['page_size'],25);self.assertFalse(r['has_more'])
+        self.assertEqual(self.client.get('/api/platform/tenants?page=invalid').status_code,400)
+        for path in ('/super-admin/organizations/'+self.tenant,'/super-admin/packages/free','/super-admin/audit'):
+            self.assertEqual(self.client.get(path).status_code,200);self.assertEqual(self.other.get(path).status_code,404)
     def platform(self):
         with app.connection() as c:c.execute('INSERT INTO platform_admin_grants VALUES(?,?,?,?)',(self.aid,app.now(),'test','Provisioned test operator'))
         r=self.client.post('/api/platform/mfa/setup',json={'password':self.password});self.assertEqual(r.status_code,200,r.json);secret=r.json['secret']

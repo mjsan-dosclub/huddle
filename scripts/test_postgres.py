@@ -153,6 +153,9 @@ class PostgresDeploymentTests(unittest.TestCase):
         setup=client.post('/api/platform/mfa/setup',json={'password':'BillingPg!2026'});self.assertEqual(setup.status_code,200,setup.json)
         result=client.post('/api/platform/mfa/confirm',json={'password':'BillingPg!2026','code':security.totp(setup.json['secret'])});self.assertEqual(result.status_code,200,result.json)
         self.assertEqual(client.get('/api/platform/overview').status_code,200)
+        history=client.get('/api/platform/audit?q=Authenticator&days=7').json
+        self.assertGreaterEqual(history['total'],1);self.assertFalse(history['auto_delete'])
+        self.assertTrue(all('action_label' in row and row['actor_email'] is not None for row in history['entries']))
         with self.assertRaises(Exception):
             with fixtures.app.connection() as c:c.execute('DELETE FROM platform_audit')
         with psycopg.connect(url,autocommit=True) as admin:
