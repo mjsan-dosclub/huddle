@@ -69,7 +69,7 @@ async function uploadFile(file,purpose){if(file.size>3*1024*1024)throw new Error
 function toBase64(file){return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(String(r.result).split(',')[1]);r.onerror=reject;r.readAsDataURL(file);});}
 
 document.addEventListener('click',async event=>{const el=event.target.closest('[data-action]');if(!el||el.disabled)return;const action=el.dataset.action,id=el.dataset.id;try{
- if(action==='navigate'){if(el.dataset.page==='leads')leadsData=null;S.page=el.dataset.page;history.pushState({},'',workspaceRoute(S.page));render();}
+ if(action==='navigate'){if(el.dataset.page==='leads')leadsData=null;S.page=el.dataset.page;history.pushState({},'',workspaceRoute(S.page));render();window.scrollTo(0,0);}
  else if(action==='team-previous'||action==='team-next'){S.teamPage+=action==='team-next'?1:-1;$('#team-table').innerHTML=teamTable();}
  else if(action==='account-menu')modal('Account & security','Manage your sign-in and account protection.',`<div class="account-actions">${button(icon('lock')+'Security & 2FA','security','btn')}${button(icon('lock')+'Change password','account','btn')}</div>`);
  else if(action==='logout'){await api('/api/logout',{method:'POST',body:{}});location.href='/';}
