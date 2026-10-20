@@ -28,6 +28,8 @@ jobs:
       - run: pip install -r requirements.txt
       - name: SQLite regression and deployment adapter
         run: python -m unittest discover -s tests -v
+      - name: Plan presentation invariants
+        run: node --test tests/*.mjs
       - name: PostgreSQL through the production WSGI entrypoint
         env:
           TEST_DATABASE_URL: postgresql://postgres@127.0.0.1:5432/postgres
