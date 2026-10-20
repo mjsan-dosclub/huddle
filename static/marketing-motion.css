@@ -1,0 +1,15 @@
+.hero h1 em,.section h1 em,.section h2 em{color:#b41620;background:var(--huddle-text-gradient);background-clip:text;-webkit-background-clip:text;-webkit-text-fill-color:transparent;font-style:normal}
+.motion-ready [data-reveal]{opacity:0;transform:translateY(22px);transition:opacity .65s ease var(--reveal-delay,0ms),transform .65s cubic-bezier(.2,.7,.25,1) var(--reveal-delay,0ms),translate .25s ease,box-shadow .25s ease}
+.motion-ready [data-reveal].is-revealed{opacity:1;transform:translateY(0)}
+.motion-ready .hero-visual.is-revealed .preview-phone{animation:huddle-drift 7s ease-in-out infinite}
+.motion-ready .floating-label{animation:huddle-drift 6.5s ease-in-out infinite}
+.motion-ready .floating-tap{animation:huddle-drift 8s ease-in-out -2s infinite}
+.motion-ready .floating-lead{animation:huddle-drift 7s ease-in-out -3s infinite}
+.motion-ready .orbit-one{animation:huddle-orbit-glow 8s ease-in-out infinite}
+@keyframes huddle-drift{0%,100%{translate:0 0}50%{translate:0 -9px}}
+@keyframes huddle-orbit-glow{0%,100%{opacity:.4}50%{opacity:.8}}
+.feature-tile,.plan-card,.flow-step{transition:translate .25s ease,box-shadow .25s ease}.feature-tile:hover,.plan-card:hover{translate:0 -4px;box-shadow:0 16px 35px #9b492410}.flow-step:hover{translate:3px 0}.button.dark:hover,.plan-button.primary:hover{box-shadow:0 8px 24px #df171c20}
+@media(prefers-reduced-motion:reduce){.motion-ready [data-reveal]{opacity:1;transform:none;transition:none}.motion-ready .preview-phone,.motion-ready .floating-label,.motion-ready .floating-tap,.motion-ready .floating-lead,.motion-ready .orbit-one{animation:none}.feature-tile,.plan-card,.flow-step{transition:none}.feature-tile:hover,.plan-card:hover,.flow-step:hover{translate:none}}
+@media(forced-colors:active){.hero h1 em,.section h1 em,.section h2 em{background:none;-webkit-text-fill-color:CanvasText;color:CanvasText}}
+
+.start-label-short{display:none}@media(max-width:800px){.start-label-full{display:none}.start-label-short{display:inline}.nav-actions .button{gap:12px}}

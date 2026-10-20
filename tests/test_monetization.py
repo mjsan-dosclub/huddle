@@ -43,6 +43,17 @@ class MonetizationTests(unittest.TestCase):
         self.assertEqual(self.client.get('/api/leads/export').status_code,402)
         self.assertEqual(self.client.put('/api/cards/'+self.otherstate['cards'][0]['id'],json={'persona':'Hacked'}).status_code,404)
         self.assertEqual(self.client.get('/api/billing?tenant_id='+self.otherstate['organization']['id']).json['plan'],'free')
+    def test_signup_paid_preference_never_grants_access(self):
+        client=web.test_client()
+        result=client.post('/api/register',json={'email':'plan-choice@example.com','password':self.password,'name':'New Owner','organization':'Plan Choice','selected_plan':'enterprise','plan':'enterprise','interval':'annual','price_id':'enterprise-monthly','amount_paise':0,'tenant_id':self.otherstate['organization']['id']})
+        self.assertEqual(result.status_code,200,result.json)
+        b=client.get('/api/billing').json
+        self.assertEqual((b['plan'],b['source'],b['subscription']['status']),('free','free','FREE'))
+        self.assertTrue(b['trial_available'])
+        self.assertEqual(b['usage']['cards'],1)
+        self.assertEqual(client.post('/api/cards',json={'persona':'Extra'}).status_code,402)
+        self.assertNotEqual(client.get('/api/state').json['organization']['id'],self.otherstate['organization']['id'])
+
     def test_public_gates_and_standard_qr(self):
         slug=self.state['user']['slug'];p=self.client.get('/api/card/'+slug).json;self.assertFalse(p['lead_capture']);self.assertTrue(p['show_huddle_branding'])
         self.assertEqual(self.client.post('/api/exchange/'+slug,json={'name':'Visitor','email':'v@example.com','consent':True}).status_code,402)
