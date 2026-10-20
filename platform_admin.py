@@ -3,6 +3,17 @@ import base64,hashlib,hmac,json,re,secrets,urllib.parse
 from http.cookies import SimpleCookie
 import billing,security
 
+AUDIT_LABELS={
+ 'package.updated':'Package updated','tenant.plan_override':'Package access changed',
+ 'tenant.active':'Organization activated','tenant.paused':'Organization paused','tenant.suspended':'Organization suspended',
+ 'billing.price_created':'Price created','billing.price_availability':'Price availability changed',
+ 'billing.reconciled':'Subscription checked','billing.offline_payment_recorded':'Offline payment recorded',
+ 'support.started':'Support inspection opened','support.viewed':'Support information viewed','support.ended':'Support inspection closed',
+ 'platform.elevated':'Super Admin unlocked','platform.logout':'Super Admin locked',
+ 'platform.mfa_setup_started':'Authenticator setup started','platform.mfa_enrolled':'Authenticator enabled'
+}
+def audit_label(action):return AUDIT_LABELS.get(action,action.replace('.',' ').replace('_',' ').capitalize())
+
 def audit(app,c,account,action,tenant=None,reason='',details=None):
     c.execute('INSERT INTO platform_audit VALUES(?,?,?,?,?,?,?)',(app.uid(),account,tenant,action,app.text(reason,1000),app.dump(details or {}),app.now()))
 
@@ -82,9 +93,13 @@ def route(app,h,c,method,path):
         c.execute('DELETE FROM platform_sessions WHERE token_hash=?',(token(h),));audit(app,c,aid,'platform.logout');h.send(200,{'ok':True},headers={'Set-Cookie':'huddle_operator=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'});return True,None
     if path=='/api/platform/overview' and method=='GET':return True,metrics(app,c)
     if path=='/api/platform/tenants' and method=='GET':
-        q=app.text(h.query().get('q',[''])[0],100).lower();page=max(0,min(100000,int(h.query().get('page',['0'])[0])))
-        rows=c.execute("SELECT id FROM organizations WHERE lower(name) LIKE ? OR lower(slug) LIKE ? ORDER BY created DESC,id LIMIT 25 OFFSET ?",('%'+q+'%','%'+q+'%',page*25)).fetchall()
-        return True,{'tenants':[tenant_detail(app,c,r['id']) for r in rows],'page':page,'page_size':25}
+        q=app.text(h.query().get('q',[''])[0],100).lower()
+        try:page=max(0,min(100000,int(h.query().get('page',['0'])[0])))
+        except (ValueError,TypeError):raise app.Problem('Choose a valid organization page.')
+        args=('%'+q+'%','%'+q+'%')
+        rows=c.execute("SELECT id FROM organizations WHERE lower(name) LIKE ? OR lower(slug) LIKE ? ORDER BY created DESC,id LIMIT 25 OFFSET ?",(*args,page*25)).fetchall()
+        total=c.execute('SELECT count(*) FROM organizations WHERE lower(name) LIKE ? OR lower(slug) LIKE ?',args).fetchone()[0]
+        return True,{'tenants':[tenant_detail(app,c,r['id']) for r in rows],'page':page,'page_size':25,'total':total,'has_more':(page+1)*25<total}
     if path=='/api/platform/packages' and method=='GET':
         return True,{'packages':[billing.plan(c,r['id']) for r in c.execute("SELECT id FROM plans ORDER BY CASE id WHEN 'free' THEN 0 WHEN 'pro' THEN 1 WHEN 'enterprise' THEN 2 ELSE 3 END,id")],'quota_fields':list(billing.QUOTA_FIELDS)}
     if path.startswith('/api/platform/packages/') and method=='PUT':
@@ -118,7 +133,20 @@ def route(app,h,c,method,path):
         if len(reason)<10 or type(d.get('active'))!=bool:raise app.Problem('Supply an active flag and pricing change reason.')
         if not c.execute('SELECT 1 FROM plan_prices WHERE id=?',(pid,)).fetchone():raise app.Problem('Price not found.',404)
         c.execute('UPDATE plan_prices SET active=? WHERE id=?',(int(d['active']),pid));audit(app,c,aid,'billing.price_availability',reason=reason,details={'price_id':pid,'active':d['active']});return True,{'ok':True}
-    if path=='/api/platform/audit' and method=='GET':return True,{'entries':[dict(r) for r in c.execute('SELECT * FROM platform_audit ORDER BY created DESC,id DESC LIMIT 100')]}
+    if path=='/api/platform/audit' and method=='GET':
+        query=h.query();q=app.text(query.get('q',[''])[0],100).lower()
+        try:page=max(0,min(100000,int(query.get('page',['0'])[0])));days=int(query.get('days',['0'])[0])
+        except (ValueError,TypeError):raise app.Problem('Choose a valid audit page and date range.')
+        if days not in (0,7,30,90):raise app.Problem('Choose a valid audit date range.')
+        matching_actions=[key for key,label in AUDIT_LABELS.items() if q and q in label.lower()]
+        label_clause=' OR a.action IN ('+','.join('?' for _ in matching_actions)+')' if matching_actions else ''
+        where="WHERE (lower(a.action) LIKE ? OR lower(a.reason) LIKE ? OR lower(COALESCE(ac.email,a.actor_account_id)) LIKE ? OR lower(COALESCE(o.name,a.tenant_id,'')) LIKE ?"+label_clause+") AND a.created>=?"
+        args=tuple(['%'+q+'%']*4+matching_actions+[app.now()-days*86400 if days else 0])
+        joins=' FROM platform_audit a LEFT JOIN accounts ac ON ac.id=a.actor_account_id LEFT JOIN organizations o ON o.id=a.tenant_id '
+        rows=c.execute('SELECT a.*,ac.email AS actor_email,o.name AS organization_name'+joins+where+' ORDER BY a.created DESC,a.id DESC LIMIT 25 OFFSET ?',(*args,page*25)).fetchall()
+        total=c.execute('SELECT count(*)'+joins+where,args).fetchone()[0]
+        return True,{'entries':[{**dict(r),'action_label':audit_label(r['action'])} for r in rows],'page':page,'page_size':25,'total':total,'has_more':(page+1)*25<total,'auto_delete':False,'retention':'Records are retained. Date filters change only what is shown.'}
+
     if path=='/api/platform/support' and method=='POST':
         d=h.body();tenant=d.get('tenant_id');tenant_detail(app,c,tenant);reason=app.text(d.get('reason'),1000)
         if len(reason)<10:raise app.Problem('Enter a support reason (at least 10 characters).')
