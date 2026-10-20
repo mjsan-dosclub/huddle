@@ -24,6 +24,14 @@ from cloud_migrate import apply
 # Use the actual production WSGI handler instead of the development HTTP server.
 fixtures.app.ThreadingHTTPServer=lambda address,handler:make_server(address[0],address[1],deployment.app)
 class PostgresDeploymentTests(unittest.TestCase):
+    def test_free_organization_creation_limit_is_enforced_through_postgres(self):
+        client=deployment.app.test_client();address='org-limit-'+secrets.token_hex(5)+'@example.com'
+        r=client.post('/api/register',json={'email':address,'password':'LocalFixture!2026','name':'Owner','organization':'First'})
+        self.assertEqual(r.status_code,200,r.json)
+        r=client.post('/api/organizations',json={'name':'Personal'});self.assertEqual(r.status_code,200,r.json)
+        r=client.post('/api/organizations',json={'name':'Third','max_owned_organizations':99})
+        self.assertEqual(r.status_code,402,r.json);self.assertEqual(r.json['current_limit'],2)
+        self.assertEqual(client.get('/api/organizations').json['ownership']['owned'],2)
     def setUp(self):
         with fixtures.app.connection() as c:c.execute('DELETE FROM rate_limits')
     def test_optional_sqlite_import_preserves_links_mfa_and_private_assets(self):

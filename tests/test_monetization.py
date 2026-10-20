@@ -22,6 +22,44 @@ class MonetizationTests(unittest.TestCase):
         with app.connection() as c:return c.execute('SELECT id FROM accounts WHERE email=?',(address,)).fetchone()[0]
     def grant(self,plan='pro',expires=None,tenant=None):
         with app.connection() as c:c.execute('INSERT INTO entitlement_overrides VALUES(?,?,?,?,?,?,?,?,?)',(app.uid(),tenant or self.tenant,plan,'{}','Test access grant','test',app.now(),expires or app.now()+86400,None))
+    def test_owned_organization_limit_free_and_no_partial_creation(self):
+        r=self.client.get('/api/organizations');self.assertEqual(r.json['ownership']['limit'],2)
+        self.assertEqual(self.client.post('/api/organizations',json={'name':'Personal'}).status_code,200)
+        blocked=self.client.post('/api/organizations',json={'name':'Third','plan':'enterprise','limit':999})
+        self.assertEqual(blocked.status_code,402);self.assertEqual(blocked.json['current_limit'],2)
+        self.assertEqual(self.client.get('/api/organizations').json['ownership']['owned'],2)
+        with app.connection() as c:
+            self.assertEqual(c.execute("SELECT count(*) FROM organizations WHERE name='Third'").fetchone()[0],0)
+    def test_owned_plan_limit_changes_without_lending_paid_access(self):
+        self.grant('pro')
+        created=[]
+        for i in range(4):
+            r=self.client.post('/api/organizations',json={'name':'Workspace '+str(i)});self.assertEqual(r.status_code,200,r.json);created.append(r.json['id'])
+        self.assertEqual(self.client.post('/api/organizations',json={'name':'Sixth'}).status_code,402)
+        with app.connection() as c:
+            self.assertEqual(billing.effective(app,c,created[0])['plan'],'free')
+            c.execute('UPDATE entitlement_overrides SET expires=? WHERE tenant_id=?',(app.now()-1,self.tenant))
+        r=self.client.get('/api/organizations').json
+        self.assertEqual(r['ownership']['owned'],5);self.assertEqual(r['ownership']['limit'],2)
+        self.assertFalse(r['ownership']['can_create']);self.assertEqual(len(r['organizations']),5)
+        self.assertEqual(self.client.post('/api/organizations/switch',json={'tenant_id':created[0]}).status_code,200)
+    def test_invited_membership_neither_consumes_ownership_nor_lends_enterprise(self):
+        other_tenant=self.otherstate['organization']['id'];self.grant('enterprise',tenant=other_tenant)
+        with app.connection() as c:
+            app.add_user(c,other_tenant,{'name':'Invited member'},account_id=self.aid)
+        quota=self.client.get('/api/organizations').json
+        self.assertEqual(len(quota['organizations']),2);self.assertEqual(quota['ownership']['owned'],1)
+        self.assertEqual(quota['ownership']['limit'],2)
+    def test_enterprise_and_suspended_owned_organizations_still_count(self):
+        self.grant('enterprise')
+        r=self.client.get('/api/organizations').json;self.assertEqual(r['ownership']['limit'],20)
+        new=self.client.post('/api/organizations',json={'name':'Suspended'}).json['id']
+        with app.connection() as c:c.execute("UPDATE organizations SET status='suspended' WHERE id=?",(new,))
+        r=self.client.get('/api/organizations').json
+        self.assertEqual(r['ownership']['owned'],2);self.assertEqual(len(r['organizations']),1)
+        with app.connection() as c:
+            c.execute('UPDATE users SET active=0 WHERE tenant_id=? AND account_id=?',(self.tenant,self.aid))
+            self.assertEqual(billing.organization_capacity(app,c,self.aid)['limit'],2)
     def platform(self):
         with app.connection() as c:c.execute('INSERT INTO platform_admin_grants VALUES(?,?,?,?)',(self.aid,app.now(),'test','Provisioned test operator'))
         r=self.client.post('/api/platform/mfa/setup',json={'password':self.password});self.assertEqual(r.status_code,200,r.json);secret=r.json['secret']

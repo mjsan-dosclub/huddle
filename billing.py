@@ -2,12 +2,14 @@
 import base64,hashlib,hmac,json,os,re,urllib.error,urllib.parse,urllib.request
 import security
 
+OWNED_ORGANIZATION_LIMITS = {"free": 2, "pro": 5, "enterprise": 20}
+
 class BillingError(Exception):
     def __init__(self,code,**details):self.payload={'error':code,'upgrade_url':'/app/dashboard/billing',**details};self.code=402
 
 def plan(c,id):
     r=c.execute('SELECT * FROM plans WHERE id=?',(id,)).fetchone()
-    return dict(r,entitlements=json.loads(r['entitlements'])) if r else None
+    return dict(r,entitlements={**json.loads(r['entitlements']), 'max_owned_organizations': OWNED_ORGANIZATION_LIMITS.get(id, 2)}) if r else None
 
 def effective(app,c,tenant):
     stamp=app.now();override=c.execute('SELECT * FROM entitlement_overrides WHERE tenant_id=? AND revoked_at IS NULL AND expires>? ORDER BY created DESC,id DESC LIMIT 1',(tenant,stamp)).fetchone()
@@ -20,6 +22,22 @@ def effective(app,c,tenant):
         limits=json.loads(override['limits'])
         ent.update({k:v for k,v in limits.items() if k in ('max_cards','max_seats','max_admins')})
     return {'plan':p['id'],'name':p['name'],'entitlements':ent,'source':'override' if override else 'subscription' if usable else 'free','override_expires':override['expires'] if override else None,'subscription':dict(sub) if sub else None}
+
+def organization_capacity(app,c,account_id,enforce=False):
+    # Serialize creation for this account as well as the tenant's own quotas.
+    # Only owned organizations contribute access; an invitation never lends a plan.
+    if enforce:c.execute('UPDATE accounts SET disabled=disabled WHERE id=?',(account_id,))
+    owned=c.execute("SELECT DISTINCT o.id,o.status,u.active FROM organizations o JOIN users u ON u.tenant_id=o.id WHERE u.account_id=? AND u.role='owner'",(account_id,)).fetchall()
+    limit=OWNED_ORGANIZATION_LIMITS['free'];source='free'
+    for org in owned:
+        if org['status']!='active' or not org['active']:continue
+        access=effective(app,c,org['id'])
+        cap=access['entitlements']['max_owned_organizations']
+        if cap>limit:limit=cap;source=access['plan']
+    result={'owned':len(owned),'limit':limit,'plan':source,'can_create':len(owned)<limit}
+    if enforce and not result['can_create']:
+        raise BillingError('ORGANIZATION_LIMIT_REACHED',resource='owned_organizations',current_limit=limit,owned=len(owned),message='You have reached your owned organization limit. Existing workspaces remain accessible. Upgrade an organization you own to create more.')
+    return result
 
 def usage(app,c,tenant):
     cards=c.execute('SELECT count(*) FROM cards ca JOIN users u ON u.tenant_id=ca.tenant_id AND u.id=ca.user_id WHERE ca.tenant_id=? AND ca.active=1 AND u.active=1',(tenant,)).fetchone()[0]
