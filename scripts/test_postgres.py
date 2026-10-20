@@ -32,6 +32,19 @@ class PostgresDeploymentTests(unittest.TestCase):
         r=client.post('/api/organizations',json={'name':'Third','max_owned_organizations':99})
         self.assertEqual(r.status_code,402,r.json);self.assertEqual(r.json['current_limit'],2)
         self.assertEqual(client.get('/api/organizations').json['ownership']['owned'],2)
+    def test_package_column_permission_is_narrow_and_catalogue_is_mutable(self):
+        client=deployment.app.test_client();email='package-'+secrets.token_hex(5)+'@example.com'
+        r=client.post('/api/register',json={'email':email,'password':'LocalFixture!2026','name':'Owner','organization':'Package test'});self.assertEqual(r.status_code,200)
+        self.assertEqual(client.get('/api/platform/packages').status_code,404)
+        with fixtures.app.connection() as c:
+            row=c.execute("SELECT entitlements FROM plans WHERE id='free'").fetchone();ent=__import__('json').loads(row[0]);ent['max_owned_organizations']=3
+            c.execute("UPDATE plans SET entitlements=?,version=version+1 WHERE id='free'",(__import__('json').dumps(ent),))
+        self.assertEqual(client.get('/api/organizations').json['ownership']['limit'],3)
+        with fixtures.app.connection() as c:
+            ent['max_owned_organizations']=2;c.execute("UPDATE plans SET entitlements=? WHERE id='free'",(__import__('json').dumps(ent),))
+        with fixtures.app.connection() as c:
+            permissions=c.execute("SELECT has_column_privilege(current_user,'huddle.plans','entitlements','UPDATE') AS editable,has_table_privilege(current_user,'huddle.plans','DELETE') AS deletable,has_column_privilege(current_user,'huddle.plans','id','UPDATE') AS identity_editable").fetchone()
+            self.assertTrue(permissions['editable']);self.assertFalse(permissions['deletable']);self.assertFalse(permissions['identity_editable'])
     def setUp(self):
         with fixtures.app.connection() as c:c.execute('DELETE FROM rate_limits')
     def test_optional_sqlite_import_preserves_links_mfa_and_private_assets(self):
