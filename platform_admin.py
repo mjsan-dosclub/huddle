@@ -85,6 +85,24 @@ def route(app,h,c,method,path):
         q=app.text(h.query().get('q',[''])[0],100).lower();page=max(0,min(100000,int(h.query().get('page',['0'])[0])))
         rows=c.execute("SELECT id FROM organizations WHERE lower(name) LIKE ? OR lower(slug) LIKE ? ORDER BY created DESC,id LIMIT 25 OFFSET ?",('%'+q+'%','%'+q+'%',page*25)).fetchall()
         return True,{'tenants':[tenant_detail(app,c,r['id']) for r in rows],'page':page,'page_size':25}
+    if path=='/api/platform/packages' and method=='GET':
+        return True,{'packages':[billing.plan(c,r['id']) for r in c.execute("SELECT id FROM plans ORDER BY CASE id WHEN 'free' THEN 0 WHEN 'pro' THEN 1 WHEN 'enterprise' THEN 2 ELSE 3 END,id")],'quota_fields':list(billing.QUOTA_FIELDS)}
+    if path.startswith('/api/platform/packages/') and method=='PUT':
+        pid=path.rsplit('/',1)[-1];current=billing.plan(c,pid)
+        if not current:raise app.Problem('Unknown package.',404)
+        d=h.body();reason=app.text(d.get('reason'),1000);name=app.text(d.get('name'),80);ent=d.get('entitlements')
+        if len(reason)<10 or not name:raise app.Problem('Enter a package name and change reason (at least 10 characters).')
+        if not isinstance(ent,dict) or set(ent)!=set(current['entitlements']):raise app.Problem('Supply every existing package setting; unknown settings are not accepted.')
+        for key,value in ent.items():
+            if key in billing.QUOTA_FIELDS:
+                if value is not None and (type(value)!=int or not 1<=value<=1000000):raise app.Problem('Quotas must be 1–1,000,000, or null for unlimited.')
+            elif type(value)!=bool:raise app.Problem('Feature settings must be true or false.')
+        version=d.get('version')
+        if type(version)!=int or version!=current['version']:raise app.Problem('This package changed. Reload before saving.',409)
+        updated=c.execute('UPDATE plans SET name=?,entitlements=?,version=version+1 WHERE id=? AND version=?',(name,app.dump(ent),pid,version))
+        if updated.rowcount!=1:raise app.Problem('This package changed. Reload before saving.',409)
+        audit(app,c,aid,'package.updated',reason=reason,details={'plan':pid,'before':current,'after':billing.plan(c,pid)})
+        return True,{'ok':True,'package':billing.plan(c,pid)}
     if path=='/api/platform/prices':
         if method=='GET':return True,{'prices':[dict(r) for r in c.execute('SELECT * FROM plan_prices ORDER BY plan_id,amount_paise')]}
         if method=='POST':

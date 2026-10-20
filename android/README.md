@@ -1,4 +1,4 @@
-# HUDDLE Admin for Android 0.8.0
+# HUDDLE Admin for Android 0.8.1
 
 Native Android views and NFC reader mode; no WebView. Source package `com.hello.cards.admin` remains stable for existing installs. The app supports email/password and authenticator/recovery-code login, organization switching, member/card management, branding/templates, leads, analytics, spreadsheet onboarding and NFC preparation/write/read-back.
 
@@ -21,3 +21,9 @@ HUDDLE’s light red/cream theme now covers native controls, navigation, launch 
 The organization selector displays the server ownership allowance (Free 2 / Pro 5 / Enterprise 20). Membership invitations do not consume this allowance; new organizations start Free. Existing organizations are preserved when a limit is exceeded or paid access expires.
 
 This APK remains a signed development build. NFC writes/readback need testing on a physical NFC-enabled Android device; the emulator cannot validate physical tag operations. Apple and Google Wallet remain unavailable scaffolds.
+
+## 0.8.1 — full-screen introduction and central packages
+
+The first opening now checks the workspace with an animated, full-screen illustrative paper-saving scene. It reflects request duration and does not impose an artificial wait. The first-run introduction uses full-screen editorial layouts and native vector card/leaf illustrations, swipe gestures, touchable progress dots, a compact arrow and plain Skip text. No admin header or bottom navigation appears in these scenes. Animations respect Android’s disabled animator setting and stop when detached/hidden. Introduction replay remains under App settings.
+
+Ownership, member and card limits come from the server plan catalogue. Invitation menus remain accessible at capacity; the app shows a limit explanation and links to existing invitations instead of presenting a submission form. Server enforcement remains authoritative when cached capacity is stale.

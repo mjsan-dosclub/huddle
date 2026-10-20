@@ -60,6 +60,46 @@ class MonetizationTests(unittest.TestCase):
         with app.connection() as c:
             c.execute('UPDATE users SET active=0 WHERE tenant_id=? AND account_id=?',(self.tenant,self.aid))
             self.assertEqual(billing.organization_capacity(app,c,self.aid)['limit'],2)
+    def test_package_manager_requires_platform_elevation_and_audits_changes(self):
+        self.assertEqual(self.client.get('/api/platform/packages').status_code,404)
+        self.platform();catalog=self.client.get('/api/platform/packages').json
+        free=next(p for p in catalog['packages'] if p['id']=='free')
+        payload={'name':'Free','version':free['version'],'reason':'Reviewed ownership allowance','entitlements':{**free['entitlements'],'max_owned_organizations':3}}
+        self.assertEqual(self.other.put('/api/platform/packages/free',json=payload).status_code,404)
+        r=self.client.put('/api/platform/packages/free',json=payload);self.assertEqual(r.status_code,200,r.json)
+        self.assertEqual(self.other.get('/api/organizations').json['ownership']['limit'],3)
+        public=next(p for p in self.other.get('/api/public/plans').json['plans'] if p['id']=='free')
+        self.assertEqual(public['entitlements']['max_owned_organizations'],3)
+        self.assertEqual(self.client.put('/api/platform/packages/free',json=payload).status_code,409)
+        with app.connection() as c:
+            entries=c.execute("SELECT details FROM platform_audit WHERE action='package.updated'").fetchall()
+            self.assertEqual(len(entries),1);self.assertEqual(json.loads(entries[0][0])['before']['entitlements']['max_owned_organizations'],2)
+    def test_package_manager_rejects_invalid_and_unknown_settings(self):
+        self.platform();p=next(p for p in self.client.get('/api/platform/packages').json['packages'] if p['id']=='free')
+        base={'name':p['name'],'version':p['version'],'reason':'Validate package settings','entitlements':p['entitlements']}
+        for change in ({'max_cards':True},{'max_owned_organizations':-1},{'custom_qr':1},{'is_platform_admin':True}):
+            payload={**base,'entitlements':{**base['entitlements'],**change}}
+            self.assertEqual(self.client.put('/api/platform/packages/free',json=payload).status_code,400)
+    def test_catalogue_changes_drive_invite_limits_and_pending_reservations(self):
+        state=self.client.get('/api/state').json;self.assertTrue(state['invitation_capacity']['reached'])
+        invite={'name':'New colleague','email':'new@example.com','division_id':state['divisions'][0]['id'],'template_id':state['templates'][0]['id']}
+        r=self.client.post('/api/invitations',json=invite);self.assertEqual(r.status_code,402);self.assertIn('limit',r.json['message'])
+        self.platform();p=next(p for p in self.client.get('/api/platform/packages').json['packages'] if p['id']=='free')
+        ent={**p['entitlements'],'max_seats':2,'max_cards':2}
+        self.assertEqual(self.client.put('/api/platform/packages/free',json={'name':'Free','version':p['version'],'reason':'Adjusted member and card quota','entitlements':ent}).status_code,200)
+        self.assertFalse(self.client.get('/api/state').json['invitation_capacity']['reached'])
+        self.assertEqual(self.client.post('/api/invitations',json=invite).status_code,200)
+        self.assertTrue(self.client.get('/api/state').json['invitation_capacity']['reached'])
+        self.assertEqual(self.client.post('/api/invitations',json={**invite,'email':'another@example.com'}).status_code,402)
+        self.assertEqual(len(self.client.get('/api/state').json['invitations']),1)
+    def test_unlimited_ownership_comes_from_catalogue_and_survives_migration_rerun(self):
+        with app.connection() as c:
+            p=billing.plan(c,'free');p['entitlements']['max_owned_organizations']=None
+            c.execute('UPDATE plans SET entitlements=? WHERE id=?',(app.dump(p['entitlements']),'free'))
+        import migrate
+        migrate.apply(app)
+        self.assertIsNone(self.client.get('/api/organizations').json['ownership']['limit'])
+        for i in range(3):self.assertEqual(self.client.post('/api/organizations',json={'name':'Personal '+str(i)}).status_code,200)
     def platform(self):
         with app.connection() as c:c.execute('INSERT INTO platform_admin_grants VALUES(?,?,?,?)',(self.aid,app.now(),'test','Provisioned test operator'))
         r=self.client.post('/api/platform/mfa/setup',json={'password':self.password});self.assertEqual(r.status_code,200,r.json);secret=r.json['secret']

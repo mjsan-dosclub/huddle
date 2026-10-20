@@ -2,14 +2,14 @@
 import base64,hashlib,hmac,json,os,re,urllib.error,urllib.parse,urllib.request
 import security
 
-OWNED_ORGANIZATION_LIMITS = {"free": 2, "pro": 5, "enterprise": 20}
+QUOTA_FIELDS = ("max_cards", "max_seats", "max_admins", "max_owned_organizations")
 
 class BillingError(Exception):
     def __init__(self,code,**details):self.payload={'error':code,'upgrade_url':'/app/dashboard/billing',**details};self.code=402
 
 def plan(c,id):
     r=c.execute('SELECT * FROM plans WHERE id=?',(id,)).fetchone()
-    return dict(r,entitlements={**json.loads(r['entitlements']), 'max_owned_organizations': OWNED_ORGANIZATION_LIMITS.get(id, 2)}) if r else None
+    return dict(r,entitlements=json.loads(r['entitlements'])) if r else None
 
 def effective(app,c,tenant):
     stamp=app.now();override=c.execute('SELECT * FROM entitlement_overrides WHERE tenant_id=? AND revoked_at IS NULL AND expires>? ORDER BY created DESC,id DESC LIMIT 1',(tenant,stamp)).fetchone()
@@ -28,16 +28,23 @@ def organization_capacity(app,c,account_id,enforce=False):
     # Only owned organizations contribute access; an invitation never lends a plan.
     if enforce:c.execute('UPDATE accounts SET disabled=disabled WHERE id=?',(account_id,))
     owned=c.execute("SELECT DISTINCT o.id,o.status,u.active FROM organizations o JOIN users u ON u.tenant_id=o.id WHERE u.account_id=? AND u.role='owner'",(account_id,)).fetchall()
-    limit=OWNED_ORGANIZATION_LIMITS['free'];source='free'
+    limit=plan(c,'free')['entitlements'].get('max_owned_organizations',0);source='free'
     for org in owned:
         if org['status']!='active' or not org['active']:continue
         access=effective(app,c,org['id'])
-        cap=access['entitlements']['max_owned_organizations']
-        if cap>limit:limit=cap;source=access['plan']
-    result={'owned':len(owned),'limit':limit,'plan':source,'can_create':len(owned)<limit}
+        cap=access['entitlements'].get('max_owned_organizations',0)
+        if limit is not None and (cap is None or cap>limit):limit=cap;source=access['plan']
+    result={'owned':len(owned),'limit':limit,'plan':source,'can_create':limit is None or len(owned)<limit}
     if enforce and not result['can_create']:
         raise BillingError('ORGANIZATION_LIMIT_REACHED',resource='owned_organizations',current_limit=limit,owned=len(owned),message='You have reached your owned organization limit. Existing workspaces remain accessible. Upgrade an organization you own to create more.')
     return result
+
+def invitation_capacity(app,c,tenant):
+    access=effective(app,c,tenant);u=usage(app,c,tenant);e=access['entitlements']
+    seats=u['seats']+u['reserved_invitations'];cards=u['cards']+u['reserved_invitations']
+    full=lambda used,cap:cap is not None and used>=cap
+    blocked=full(seats,e['max_seats']) or full(cards,e['max_cards'])
+    return {'reached':blocked,'seats_used':seats,'seat_limit':e['max_seats'],'cards_reserved':cards,'card_limit':e['max_cards'],'message':'Your organization has reached its member or card limit. Pending invitations reserve capacity. Existing members and invitations remain accessible; ask your Owner to review the package or free capacity.' if blocked else ''}
 
 def usage(app,c,tenant):
     cards=c.execute('SELECT count(*) FROM cards ca JOIN users u ON u.tenant_id=ca.tenant_id AND u.id=ca.user_id WHERE ca.tenant_id=? AND ca.active=1 AND u.active=1',(tenant,)).fetchone()[0]
@@ -58,7 +65,7 @@ def capacity(app,c,tenant,kind,amount=1,exclude_invitation_email=None):
         inv=c.execute("SELECT data FROM invitations WHERE tenant_id=? AND email=? AND status='pending' AND expires>?",(tenant,exclude_invitation_email,app.now())).fetchone()
         if inv and (kind!='admins' or json.loads(inv['data']).get('role')=='admin'):reserved-=1
     limit=e['max_'+kind]
-    if limit is not None and u[kind]+reserved+amount>limit:raise BillingError('QUOTA_EXCEEDED',resource=kind,current_usage=u[kind],reserved=reserved,current_limit=limit)
+    if limit is not None and u[kind]+reserved+amount>limit:raise BillingError('QUOTA_EXCEEDED',resource=kind,current_usage=u[kind],reserved=reserved,current_limit=limit,message='This organization has reached its '+kind+' limit ('+str(u[kind]+reserved)+' of '+str(limit)+', including pending invitations). Ask the Owner to review the package or free capacity.')
 
 def editable(app,c,tenant,row,data):
     if data.get('active') is False:return
