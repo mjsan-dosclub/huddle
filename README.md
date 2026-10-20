@@ -1,64 +1,35 @@
 # HUDDLE
 
-Multi-tenant digital business cards, team governance, NFC assignments and consented contact exchange. Version 0.6.1 prepares the existing application for Vercel Functions with Supabase PostgreSQL and private Storage.
+**Digital business cards. Better introductions. Lasting connections.**
 
-**Deployment guide: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).** No cloud resources, real credentials or user database are included. The first deployment needs a Supabase project, database migrations and Vercel environment settings.
+HUDDLE helps individuals and teams share their identity through a link, QR code or optional NFC card. Recipients open the card in their browser—no app or account required.
 
-## Structure
+[Explore HUDDLE](https://huddle-alpha-ruby.vercel.app/) · [Card templates](https://huddle-alpha-ruby.vercel.app/templates) · [Pricing](https://huddle-alpha-ruby.vercel.app/pricing)
 
-```text
-app.py                  Flask/WSGI entrypoint for Vercel
-server.py               Shared web/native API, tenant predicates and RBAC
-security.py             Existing password, Google OIDC and tenant MFA logic
-surfaces.py              Marketing, application and recipient routing
-database.py              SQLite/PostgreSQL adapter and distributed rate limits
-object_storage.py        Private Supabase Storage adapter
-static/                  Landing, admin UI, shared card renderer, recipient PWA
-migrations/              SQLite development migrations
-supabase/migrations/     Versioned PostgreSQL schema, access controls and bucket
-scripts/                 Explicit migration, import, diagnostics and PG test tools
-android/                 Native Android admin/NFC source (no WebView)
-tests/                   Regression and deployment-adapter tests
-.github/workflows/ci.yml SQLite and real PostgreSQL checks
-```
+## What you can do
 
-## Local development
+- **Create and share cards:** Choose a template, manage card personas and add contact details, WhatsApp and UPI blocks.
+- **Manage your team:** Organize divisions, invite members in bulk and keep branding consistent with approved templates and field controls.
+- **Keep connections:** Capture contact exchanges with consent, review networking activity and export leads on eligible plans.
+- **Use NFC:** Assign, reassign or deactivate card links; write and verify compatible tags with the native Android admin app.
+- **Run the platform:** Manage organizations, packages, usage limits, pricing and human-readable audit history from Super Admin.
 
-Python 3.12 and `pip install -r requirements.txt` are required. Environment variables are not embedded in the browser. Copy `.env.example` only if needed; never commit real values.
+Organizations have separate data and Owner, Admin and Member permissions. Plan features and limits are managed centrally.
 
-For a disposable SQLite demo, leave `DATABASE_URL` and `SUPABASE_URL` unset, then run:
+## Built with
 
-```sh
-python server.py --demo --host 127.0.0.1 --port 8765
-```
+Python/Flask, JavaScript, HTML and CSS. Vercel hosts the web application; Supabase provides PostgreSQL and private image storage. Local development supports SQLite. The Android app uses native Java views and NFC APIs.
 
-Demo credentials: `admin@hello.example` / `HelloDemo!2026`. These are seeded only with the explicit `--demo` flag; Vercel never seeds them.
+## Project status
 
-For the production request handler locally, initialize the database explicitly, then use `flask --app app run`. An empty cloud database accepts organization signup and assigns the creator Owner. Existing authentication is retained; **Supabase Auth is not used**. Supabase provides PostgreSQL and private object storage. The database runtime role is trusted, and API session, RBAC and tenant predicates enforce isolation; anonymous Supabase clients receive no table/storage access.
+HUDDLE is under active development. Web cards, team management and the Android test app are available. Razorpay billing requires provider configuration; email delivery and Google sign-in also need configured providers. Apple/Google Wallet passes, direct CRM sync and an iOS app remain planned.
 
-## Routes
+## Guides
 
-- `/`, `/pricing`, `/features`, `/templates`: marketing.
-- `/app/login`, `/app/signup`, `/app/dashboard/*`: local/single-domain application.
-- `/c/:handle`: public cards; `/n/:token`: stable NFC redirects.
-- Optional same-project hosts: marketing `huddle.co.in`, application `app.huddle.co.in`, recipients `c.huddle.co.in`. Configure origins only after DNS/HTTPS are ready.
+- [Deployment and local setup](docs/DEPLOYMENT.md)
+- [Subscriptions and platform operations](docs/MONETIZATION.md)
+- [Central package management](docs/PACKAGE-MANAGER.md)
+- [Super Admin interface](docs/SUPER-ADMIN-UX.md)
+- [Android app and build instructions](android/README.md)
 
-Do not publish NFC cards with a LAN IP or a disposable Vercel preview hostname. A URL already written to a tag cannot be changed by migrating its database record.
-
-## Validation
-
-```sh
-python -m unittest discover -s tests -v
-# Disposable localhost PostgreSQL only; this resets the huddle schema.
-TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:5432/postgres \
-TEST_ALLOW_RESET=1 python scripts/test_postgres.py
-```
-
-Do not point the PostgreSQL test command at a real project. It intentionally rejects non-local URLs. CI uses an isolated PostgreSQL service and no deployment credentials.
-
-## Release limits
-
-Images are limited to 3 MB and workbooks to 2 MB to fit Vercel's base64 request limit. Existing Android 0.6 clients can still connect but should update for the matching client-side image limit. The recipient PWA caches static resources only; profiles and contact exchange need connectivity. Wallet signing, CRM sync, SCIM, billing and native Google OAuth are not implemented. Google web login and Resend require provider configuration. Physical NFC writing must be checked with real hardware.
-
-
-Platform operations and billing (0.7): see [the implementation and rollout guide](docs/MONETIZATION.md). New organizations are Free; pre-existing organizations receive a 90-day compatibility grant. Founder access is separately provisioned, never granted by signup.
+Application source lives in the root Python modules and `static/`; database changes in `migrations/` and `supabase/migrations/`; automated checks in `tests/`.
