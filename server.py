@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """HUDDLE: organization-scoped cards, relationships and native Android API."""
-import security, surfaces, database, object_storage
+import security, surfaces, database, object_storage, billing, platform_admin
 import argparse,base64,csv,hashlib,hmac,html,io,json,mimetypes,os,re,secrets,sqlite3,sys,threading,time,urllib.error,urllib.parse,urllib.request,zipfile
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
@@ -87,6 +87,7 @@ def user_dict(c,row):
     return d
 
 def create_card(c,tenant,user_id,data,persona='Executive',default=False,slug=None):
+    billing.capacity(sys.modules[__name__],c,tenant,'cards')
     member=scoped(c,'users',tenant,user_id);brand=company(c,tenant);tid=data.get('template_id') or brand['default_template'];t=scoped(c,'templates',tenant,tid)
     if not json.loads(t['data']).get('enabled',True):raise Problem('Choose an enabled template.')
     profile={k:data.get(k,[] if k in ('banners','personal_links') else '') for k in FIELDS};profile['banner_mode']=data.get('banner_mode','company')
@@ -96,6 +97,9 @@ def create_card(c,tenant,user_id,data,persona='Executive',default=False,slug=Non
 
 def add_user(c,tenant,data,password=None,role='member',account_id=None):
     if role not in ('owner','admin','member'):raise Problem('Choose Owner, Admin or Member.')
+    address_for_quota=data.get('email') or (c.execute('SELECT email FROM accounts WHERE id=?',(account_id,)).fetchone()[0] if account_id else '')
+    billing.capacity(sys.modules[__name__],c,tenant,'seats',exclude_invitation_email=address_for_quota)
+    if role in ('owner','admin'):billing.capacity(sys.modules[__name__],c,tenant,'admins',exclude_invitation_email=address_for_quota)
     if data.get('division_id'):scoped(c,'divisions',tenant,data['division_id'])
     if not account_id:
         address=email(data.get('email'));existing=c.execute('SELECT id FROM accounts WHERE email=?',(address,)).fetchone()
@@ -104,14 +108,17 @@ def add_user(c,tenant,data,password=None,role='member',account_id=None):
     address=c.execute('SELECT email FROM accounts WHERE id=?',(account_id,)).fetchone()['email'];mid=uid()
     profile={'name':text(data.get('name')) or address.split('@')[0],'title':text(data.get('title')),'phone':text(data.get('phone')),'bio':'','photo':'','personal_links':[],'banners':[],'banner_mode':'company'}
     c.execute('INSERT INTO users VALUES(?,?,?,?,?,?,?,?,?)',(mid,tenant,account_id,role,data.get('division_id') or None,dump(profile),1,now(),None))
-    create_card(c,tenant,mid,{**profile,**data,'email':address},default=True);return mid
+    c.execute("UPDATE invitations SET status='accepted' WHERE tenant_id=? AND email=? AND status='pending' AND expires>?",(tenant,address,now()))
+    create_card(c,tenant,mid,{**profile,**data,'name':profile['name'],'email':address},default=True);return mid
 
-def create_org(c,name,account_id,person_name=''):
+def create_org(c,name,account_id,person_name='',demo_grant=False):
     name=text(name)
     if not name:raise Problem('Enter an organization name.')
     tenant=uid();slug=re.sub(r'[^a-z0-9]+','-',name.lower()).strip('-')[:45]+'-'+tenant[:6]
     brand={'name':name,'tagline':'Every introduction matters.','description':'','logo':'','logo_scale':100,'background':'#164e40','images':[],'email_domain':'','website':'','allow_employee_banners':True,'analytics_salt':secrets.token_hex(32),'qr':{'foreground':'#164e40','background':'#ffffff','logo':False,'frame':'Scan to connect'}}
     c.execute('INSERT INTO organizations VALUES(?,?,?,?,?,?)',(tenant,name,slug,'active',dump(brand),now()))
+    c.execute('INSERT INTO subscriptions(id,tenant_id,plan_id,status,mode,created,updated) VALUES(?,?,?,?,?,?,?)',(uid(),tenant,'free','FREE','none',now(),now()))
+    if demo_grant:c.execute('INSERT INTO entitlement_overrides VALUES(?,?,?,?,?,?,?,?,?)',(uid(),tenant,'enterprise','{}','Local demonstration grant','demo',now(),now()+90*86400,None))
     did=uid();c.execute('INSERT INTO divisions VALUES(?,?,?,?,?)',(did,tenant,'General',dump({'description':'','address':'','email':'','phone':'','socials':[]}),now()))
     for i,title in enumerate(['Classic','Portrait','Minimal','Statement','Executive Charcoal','Mint Neon','Vibrant Sunset']):
         tid=uid();policy={'layout':LAYOUTS[i],'accent':({'executive':'#242a29','mint':'#b7f264','sunset':'#ed795e'}.get(LAYOUTS[i],'#164e40')),'visible_fields':FIELDS,'locked_fields':['name','title','email'],'personal_links_allowed':True,'enabled':True,'allowed_blocks':['whatsapp','upi']}
@@ -139,7 +146,7 @@ def initialise(demo=False):
         password=os.environ.get('HUDDLE_ADMIN_PASSWORD',os.environ.get('HELLO_ADMIN_PASSWORD','HelloDemo!2026' if demo else ''))
         if not address or not password:raise Problem('Set HELLO_ADMIN_EMAIL and HELLO_ADMIN_PASSWORD or use --demo.')
         aid=uid();c.execute('INSERT INTO accounts VALUES(?,?,?,?,?)',(aid,email(address),password_hash(password),now(),None))
-        tenant=create_org(c,os.environ.get('HUDDLE_ORGANIZATION_NAME',os.environ.get('HELLO_COMPANY_NAME','HUDDLE Demo')),aid,'Alex Morgan' if demo else os.environ.get('HUDDLE_ADMIN_NAME',os.environ.get('HELLO_ADMIN_NAME','Workspace owner')))
+        tenant=create_org(c,os.environ.get('HUDDLE_ORGANIZATION_NAME',os.environ.get('HELLO_COMPANY_NAME','HUDDLE Demo')),aid,'Alex Morgan' if demo else os.environ.get('HUDDLE_ADMIN_NAME',os.environ.get('HELLO_ADMIN_NAME','Workspace owner')),demo_grant=demo)
         if demo:
             did=c.execute('SELECT id FROM divisions WHERE tenant_id=?',(tenant,)).fetchone()[0]
             for name in ['Sophie Chen','Daniel Reed','Maya Patel','James Wilson']:add_user(c,tenant,{'name':name,'email':name.lower().replace(' ','.')+'@hello.example','division_id':did},'HelloDemo!2026')
@@ -153,16 +160,20 @@ def card_row(c,slug):
 def public_card(c,slug):
     r=card_row(c,slug);tenant=r['tenant_id'];u=scoped(c,'users',tenant,r['user_id']);t=scoped(c,'templates',tenant,r['template_id']);policy=json.loads(t['data']);brand=company(c,tenant)
     if not policy.get('enabled',True):raise Problem('This card is not published.',404)
+    entitlement=billing.effective(sys.modules[__name__],c,tenant)['entitlements']
+    if not entitlement['custom_branding']:
+        brand={**brand,'logo':'','background':'#164e40'};policy={**policy,'accent':'#164e40'}
     p=json.loads(r['data']);visible=policy['visible_fields'];profile={k:p.get(k,'') for k in visible if k!='banners'}
     if not policy['personal_links_allowed']:profile.pop('personal_links',None)
     division=scoped(c,'divisions',tenant,u['division_id']) if u['division_id'] else None
     banners=p.get('banners',[]) if p.get('banner_mode')=='personal' and brand['allow_employee_banners'] else brand['images']
     if 'banners' not in visible:banners=[]
     blocks=json.loads(r['blocks']);allowed=policy.get('allowed_blocks',['whatsapp','upi']);blocks={k:v for k,v in blocks.items() if k in allowed}
-    return {'profile':profile,'company':{k:brand[k] for k in ['name','tagline','description','logo','logo_scale','background','images','website','allow_employee_banners']},'division':dict(name=division['name'],**json.loads(division['data'])) if division else None,'template':{'name':t['name'],'layout':policy['layout'],'accent':policy['accent']},'slug':slug,'card_id':r['id'],'persona':r['persona'],'blocks':blocks,'banner_images':banners,'lead_capture':True}
+    return {'profile':profile,'company':{k:brand[k] for k in ['name','tagline','description','logo','logo_scale','background','images','website','allow_employee_banners']},'division':dict(name=division['name'],**json.loads(division['data'])) if division else None,'template':{'name':t['name'],'layout':policy['layout'],'accent':policy['accent']},'slug':slug,'card_id':r['id'],'persona':r['persona'],'blocks':blocks,'banner_images':banners,'lead_capture':entitlement['lead_capture'],'show_huddle_branding':not entitlement['remove_branding']}
 
 def edit_card(c,actor,row,data):
     tenant=actor['tenant_id'];admin=actor['role'] in ('owner','admin')
+    billing.editable(sys.modules[__name__],c,tenant,row,data)
     if row['user_id']!=actor['id'] and not admin:raise Problem('You can edit only your own cards.',403)
     p=json.loads(row['data']);policy=json.loads(scoped(c,'templates',tenant,row['template_id'])['data']);brand=company(c,tenant)
     for f in FIELDS:
@@ -235,6 +246,9 @@ def invitation(c,actor,data,deliver=True):
     tid=data.get('template_id') or company(c,tenant)['default_template'];scoped(c,'templates',tenant,tid)
     if not text(data.get('name')):raise Problem('Enter a name.')
     if c.execute('SELECT 1 FROM users u JOIN accounts a ON a.id=u.account_id WHERE u.tenant_id=? AND a.email=?',(tenant,address)).fetchone() or c.execute("SELECT 1 FROM invitations WHERE tenant_id=? AND email=? AND status='pending' AND expires>?",(tenant,address,now())).fetchone():raise Problem('An account or pending invitation already exists.',409)
+    billing.capacity(sys.modules[__name__],c,tenant,'seats')
+    billing.capacity(sys.modules[__name__],c,tenant,'cards')
+    if role=='admin':billing.capacity(sys.modules[__name__],c,tenant,'admins')
     iid=uid();token=secrets.token_urlsafe(32);details={'name':text(data['name']),'title':text(data.get('title')),'division_id':data.get('division_id'),'template_id':tid,'role':role}
     c.execute('INSERT INTO invitations VALUES(?,?,?,?,?,?,?,?,?,?,?)',(iid,tenant,address,dump(details),hashlib.sha256(token.encode()).hexdigest(),token,'pending','disabled' if DEMO else 'pending',now(),now()+7*86400,None))
     inv=dict(c.execute('SELECT * FROM invitations WHERE tenant_id=? AND id=?',(tenant,iid)).fetchone());
@@ -242,7 +256,7 @@ def invitation(c,actor,data,deliver=True):
     audit(c,actor,'invitation.created',iid);return iid
 
 class Handler(BaseHTTPRequestHandler):
-    server_version='HUDDLE/0.6.1'
+    server_version='HUDDLE/0.7.0'
     def log_message(self,fmt,*args):
         if args and isinstance(args[0],str):args=(args[0].split('?')[0],)+args[1:]
         super().log_message(fmt,*args)
@@ -299,6 +313,7 @@ class Handler(BaseHTTPRequestHandler):
                 c.execute('BEGIN IMMEDIATE' if method!='GET' else 'BEGIN')
                 result=self.route(c,method,path)
             if result is not None:self.send(200,result)
+        except billing.BillingError as e:self.send(e.code,e.payload)
         except Problem as e:self.send(e.code,{'error':e.message})
         except sqlite3.IntegrityError:self.send(409,{'error':'Duplicate record or invalid organization relationship.'})
         except Exception as e:
@@ -309,11 +324,15 @@ class Handler(BaseHTTPRequestHandler):
             if self._pending_response is not None:self.send(*self._pending_response)
     def query(self):return urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
     def route(self,c,method,path):
+        matched,result=platform_admin.route(sys.modules[__name__],self,c,method,path)
+        if matched:return result
+        matched,result=billing.routes(sys.modules[__name__],self,c,method,path)
+        if matched:return result
         matched,result=security.handle(sys.modules[__name__],self,c,method,path)
         if matched:return result
         matched,result=surfaces.serve(sys.modules[__name__],self,c,method,path)
         if matched:return result
-        if path=='/api/health' and method=='GET':return {'ok':True,'application':'HUDDLE','schema_version':2,'version':'0.6.1'}
+        if path=='/api/health' and method=='GET':return {'ok':True,'application':'HUDDLE','schema_version':3,'version':'0.7.0'}
         if path=='/api/setup' and method=='GET':return {'company_name':'HUDDLE','demo':DEMO,'email_configured':not DEMO and bool(os.environ.get('RESEND_API_KEY') and os.environ.get('RESEND_FROM') and os.environ.get('PUBLIC_BASE_URL')),'join_enabled':False,'divisions':[],'multi_tenant':True,'registration_enabled':True,'google_configured':security.google_configured()}
         if path=='/api/register' and method=='POST':
             self.limited('register',8);d=self.body();aid=uid();c.execute('INSERT INTO accounts VALUES(?,?,?,?,?)',(aid,email(d.get('email')),password_hash(d.get('password')),now(),None));tenant=create_org(c,d.get('organization'),aid,text(d.get('name')))
@@ -369,7 +388,7 @@ class Handler(BaseHTTPRequestHandler):
             if d.get('kind') not in ('view','link_click'):raise Problem('Invalid event.')
             cookie=self.record_activity(c,r,d['kind'],d.get('source','link'),text(d.get('label'),40));self.send(200,{'ok':True},headers={'Set-Cookie':cookie} if cookie else None);return
         if method=='POST' and path.startswith('/api/exchange/'):
-            self.limited('leads',30);r=card_row(c,path.rsplit('/',1)[-1]);public_card(c,r['slug']);d=self.body()
+            self.limited('leads',30);r=card_row(c,path.rsplit('/',1)[-1]);public_card(c,r['slug']);billing.require(sys.modules[__name__],c,r['tenant_id'],'lead_capture');d=self.body()
             if d.get('website_trap'):return {'ok':True}
             if d.get('consent') is not True:raise Problem('Consent is required to share your details.')
             data={'name':text(d.get('name'),150),'email':email(d.get('email')),'phone':text(d.get('phone'),40),'company':text(d.get('company'),150),'message':text(d.get('message'),2000)}
@@ -390,7 +409,7 @@ class Handler(BaseHTTPRequestHandler):
                         buf+=char
                     folded.append(buf)
                 cookie=self.record_activity(c,r,'contact_download',self.query().get('via',['link'])[0]);self.send(200,'\r\n'.join(folded)+'\r\n','text/vcard; charset=utf-8',{'Content-Disposition':'attachment; filename="'+slug+'.vcf"',**({'Set-Cookie':cookie} if cookie else {})});return
-            target=base_url()+'/c/'+slug+'?via=qr';qrconfig=company(c,r['tenant_id']).get('qr',{})
+            target=base_url()+'/c/'+slug+'?via=qr';qrconfig=company(c,r['tenant_id']).get('qr',{}) if billing.effective(sys.modules[__name__],c,r['tenant_id'])['entitlements']['custom_qr'] else {}
             if path.startswith('/upi/'):
                 block=card['blocks'].get('upi')
                 if not block:raise Problem('UPI block unavailable.',404)
@@ -413,7 +432,7 @@ class Handler(BaseHTTPRequestHandler):
                 if security.enabled(c,target,member['id']):return security.challenge(sys.modules[__name__],c,member,'switch',{'session':self.token_hash()})
                 c.execute('UPDATE sessions SET active_tenant_id=? WHERE token_hash=? AND account_id=?',(target,self.token_hash(),actor['account_id']));return {'ok':True}
             if path=='/api/state' and method=='GET':
-                brand=company(c,tenant);brand={k:v for k,v in brand.items() if k!='analytics_salt'};result={'user':{k:v for k,v in actor.items() if k!='account_id'},'company':brand,'organization':{'id':tenant,'name':brand['name']},'divisions':docs(c,'divisions',tenant),'templates':docs(c,'templates',tenant),'base_url':base_url(),'cards':self.cards(c,actor)}
+                brand=company(c,tenant);brand={k:v for k,v in brand.items() if k!='analytics_salt'};result={'user':{k:v for k,v in actor.items() if k!='account_id'},'company':brand,'organization':{'id':tenant,'name':brand['name']},'divisions':docs(c,'divisions',tenant),'templates':docs(c,'templates',tenant),'base_url':base_url(),'platform_access':bool(c.execute('SELECT 1 FROM platform_admin_grants WHERE account_id=?',(actor['account_id'],)).fetchone()),'cards':self.cards(c,actor),'billing':billing.summary(sys.modules[__name__],c,tenant) if actor['role']=='owner' else {k:v for k,v in billing.effective(sys.modules[__name__],c,tenant).items() if k!='subscription'}}
                 if admin:
                     result['team']=[user_dict(c,r) for r in c.execute('SELECT * FROM users WHERE tenant_id=? ORDER BY created',(tenant,))]
                     result['invitations']=[{k:r[k] for k in ('id','email','status','delivery','created','expires')}|{'data':json.loads(r['data']),'url':security.app_origin(sys.modules[__name__])+'/accept?token='+r['token']} for r in c.execute('SELECT * FROM invitations WHERE tenant_id=? ORDER BY created DESC',(tenant,)) if actor['role']=='owner' or json.loads(r['data']).get('role')=='member']
@@ -424,7 +443,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not security.enabled(c,tenant,actor['id']) and c.execute('SELECT 1 FROM user_security s JOIN users u ON u.tenant_id=s.tenant_id AND u.id=s.user_id WHERE u.account_id=? AND s.enabled=1 AND u.active=1',(actor['account_id'],)).fetchone():raise Problem('Switch to your authenticator-protected organization before changing the account password.',403)
                 d=self.body();a=c.execute('SELECT * FROM accounts WHERE id=?',(actor['account_id'],)).fetchone()
                 if not password_matches(str(d.get('current','')),a['password_hash']):raise Problem('Current password is incorrect.',403)
-                c.execute('UPDATE accounts SET password_hash=? WHERE id=?',(password_hash(d.get('password')),actor['account_id']));c.execute('DELETE FROM sessions WHERE account_id=?',(actor['account_id'],));return {'ok':True}
+                c.execute('UPDATE accounts SET password_hash=? WHERE id=?',(password_hash(d.get('password')),actor['account_id']));c.execute('DELETE FROM sessions WHERE account_id=?',(actor['account_id'],));c.execute('DELETE FROM platform_sessions WHERE account_id=?',(actor['account_id'],));return {'ok':True}
             if path=='/api/cards' and method=='GET':return {'cards':self.cards(c,actor)}
             if path=='/api/cards' and method=='POST':
                 d=self.body();member_id=d.get('user_id',actor['id'])
@@ -439,6 +458,7 @@ class Handler(BaseHTTPRequestHandler):
                 if method!='POST':raise Problem('Use POST.',405)
                 cid=path.split('/')[3];r=scoped(c,'cards',tenant,cid)
                 if r['user_id']!=actor['id']:require_admin(actor)
+                billing.require(sys.modules[__name__],c,tenant,'wallet')
                 provider=path.rsplit('/',1)[-1];self.send(503,{'error':'Wallet provider configuration required.','provider':provider,'status':'configuration_required','required':['Apple pass certificate, team ID and pass type ID'] if provider=='apple' else ['Google Wallet issuer ID and service account']});return
             if path.startswith('/api/cards/') and (path.endswith('/signature') or path.endswith('/background.png')) and method=='GET':
                 row=scoped(c,'cards',tenant,path.split('/')[3])
@@ -463,7 +483,9 @@ class Handler(BaseHTTPRequestHandler):
                 if not own and r['role']=='owner' and actor['role']!='owner':raise Problem('Only Owners can edit another Owner.',403)
                 if 'role' in d:
                     if d['role'] not in ('owner','admin','member'):raise Problem('Invalid role.')
-                    if d['role']!=r['role']:c.execute('UPDATE users SET role=? WHERE tenant_id=? AND id=?',(d['role'],tenant,r['id']))
+                    if d['role']!=r['role']:
+                        if r['role']=='member' and d['role'] in ('owner','admin'):billing.capacity(sys.modules[__name__],c,tenant,'admins')
+                        c.execute('UPDATE users SET role=? WHERE tenant_id=? AND id=?',(d['role'],tenant,r['id']))
                 if 'division_id' in d:
                     if d['division_id']!=r['division_id']:require_admin(actor)
                     if d['division_id']:scoped(c,'divisions',tenant,d['division_id'])
@@ -544,6 +566,8 @@ class Handler(BaseHTTPRequestHandler):
         c.execute('INSERT OR IGNORE INTO assets VALUES(?,?,?,?,?,?)',(uid(),tenant,actor['id'],url,'private',now()));return {'url':url}
     def branding(self,c,actor,d):
         tenant=actor['tenant_id'];brand=company(c,tenant)
+        if any(k in d and d[k]!=brand.get(k) for k in ('background','logo','logo_scale')):billing.require(sys.modules[__name__],c,tenant,'custom_branding')
+        if 'qr' in d and d['qr']!=brand.get('qr'):billing.require(sys.modules[__name__],c,tenant,'custom_qr')
         for k in ('name','tagline','description','website','email_domain'):
             if k in d:brand[k]=text(d[k],1500 if k=='description' else 300)
         if not brand['name']:raise Problem('Organization name is required.')
@@ -566,11 +590,14 @@ class Handler(BaseHTTPRequestHandler):
             def lum(v):
                 rgb=[int(v[i:i+2],16)/255 for i in (1,3,5)];rgb=[x/12.92 if x<=.04045 else ((x+.055)/1.055)**2.4 for x in rgb];return sum(x*w for x,w in zip(rgb,[.2126,.7152,.0722]))
             if (lum(bg)+.05)/(lum(fg)+.05)<4.5:raise Problem('QR codes need dark modules on a light background with at least 4.5:1 contrast.')
-            brand['qr']={'foreground':fg,'background':bg,'logo':bool(q.get('logo')),'frame':text(q.get('frame'),60)}
+            eye=q.get('eye_style','square')
+            if eye not in ('square','rounded'):raise Problem('Invalid QR eye style.')
+            brand['qr']={'foreground':fg,'background':bg,'logo':bool(q.get('logo')),'frame':text(q.get('frame'),60),'eye_style':eye}
         c.execute('UPDATE organizations SET name=?,data=? WHERE id=?',(brand['name'],dump(brand),tenant));publish_assets(c,tenant,[brand['logo']]+brand['images']);audit(c,actor,'organization.updated',tenant);return {'ok':True}
     def template(self,c,actor,d,rid):
         tenant=actor['tenant_id']
         if rid:scoped(c,'templates',tenant,rid)
+        if d.get('accent','#164e40')!='#164e40':billing.require(sys.modules[__name__],c,tenant,'custom_branding')
         if d.get('layout') not in LAYOUTS or not text(d.get('name')):raise Problem('Choose a name and valid layout.')
         visible=d.get('visible_fields',FIELDS);locked=d.get('locked_fields',[])
         if not isinstance(visible,list) or not isinstance(locked,list) or any(k not in FIELDS for k in visible+locked):raise Problem('Invalid fields.')
@@ -584,7 +611,7 @@ class Handler(BaseHTTPRequestHandler):
         else:rid=uid();c.execute('INSERT INTO templates VALUES(?,?,?,?,?)',(rid,tenant,text(d['name']),dump(policy),now()))
         audit(c,actor,'template.updated',rid);return {'id':rid}
     def onboarding(self,c,actor,method,path):
-        tenant=actor['tenant_id'];divisions=docs(c,'divisions',tenant)
+        tenant=actor['tenant_id'];billing.require(sys.modules[__name__],c,tenant,'bulk_import');divisions=docs(c,'divisions',tenant)
         if method=='GET' and path=='/api/import/template':
             if self.query().get('format',[''])[0]=='csv':
                 stream=io.StringIO();writer=csv.writer(stream);writer.writerow(['Name','Email','Job title','Division']);writer.writerow(['Example Person','person@example.com','Sales',divisions[0]['name']]);self.send(200,stream.getvalue(),'text/csv; charset=utf-8',{'Content-Disposition':'attachment; filename="huddle-team.csv"'});return
@@ -680,13 +707,17 @@ class Handler(BaseHTTPRequestHandler):
             row={k:("'"+v if isinstance(v,str) and v.lstrip().startswith(('=','+','-','@')) else v) for k,v in row.items()};writer.writerow(row)
         self.send(200,stream.getvalue(),'text/csv; charset=utf-8',{'Content-Disposition':'attachment; filename="'+filename+'"'})
     def leads(self,c,actor,export):
-        tenant=actor['tenant_id'];sql='SELECT * FROM contact_exchanges WHERE tenant_id=?';args=[tenant]
+        tenant=actor['tenant_id']
+        if export:billing.require(sys.modules[__name__],c,tenant,'lead_export')
+        sql='SELECT * FROM contact_exchanges WHERE tenant_id=?';args=[tenant]
         if actor['role']=='member':sql+=' AND user_id=?';args.append(actor['id'])
         rows=[{k:r[k] for k in ('id','user_id','card_id','consent_version','consented_at','source','created')}|json.loads(r['data']) for r in c.execute(sql+' ORDER BY created DESC',args)]
         if export:self.csv_response(rows,['name','email','phone','company','message','user_id','card_id','consent_version','consented_at','created'],'huddle-leads.csv');return
         return {'leads':rows}
     def analytics(self,c,actor,export):
-        tenant=actor['tenant_id'];query=self.query()
+        tenant=actor['tenant_id']
+        if export:billing.require(sys.modules[__name__],c,tenant,'lead_export')
+        query=self.query()
         try:days=max(1,min(365,int(query.get('days',['30'])[0])))
         except ValueError:raise Problem('Invalid date range.')
         division=query.get('division',[''])[0]
@@ -712,7 +743,7 @@ class Handler(BaseHTTPRequestHandler):
             fill=node.attrib.get('fill',fill);tag=node.tag.rsplit('}',1)[-1]
             if tag=='rect':
                 x=float(node.attrib.get('x',0));y=float(node.attrib.get('y',0));w=node.attrib.get('width','0');h=node.attrib.get('height','0');w=width if w=='100%' else float(w);h=height if h=='100%' else float(h)
-                draw.rectangle((round(x*scale),round(y*scale),round((x+w)*scale)-1,round((y+h)*scale)-1),fill=fill)
+                draw.rounded_rectangle((round(x*scale),round(y*scale),round((x+w)*scale)-1,round((y+h)*scale)-1),radius=float(node.attrib.get('rx',0))*scale,fill=fill)
             elif tag=='image':
                 raw=base64.b64decode(node.attrib['href'].split(',',1)[1]);logo=Image.open(io.BytesIO(raw)).convert('RGBA');logo.thumbnail((round(float(node.attrib['width'])*scale),round(float(node.attrib['height'])*scale)))
                 image.paste(logo,(round(float(node.attrib['x'])*scale),round(float(node.attrib['y'])*scale)),logo)
@@ -722,7 +753,13 @@ class Handler(BaseHTTPRequestHandler):
     def qr_svg(self,c,tenant,target,config):
         from reportlab.graphics.barcode import qrencoder
         q=qrencoder.QRCode(None,qrencoder.QRErrorCorrectLevel.H);q.addData(target);q.make();n=q.getModuleCount();fg=config.get('foreground','#164e40');bg=config.get('background','#ffffff');frame=config.get('frame','');height=n+8+(8 if frame else 0)
-        cells=''.join(f'<rect x="{x+4}" y="{y+4}" width="1" height="1"/>' for y in range(n) for x in range(n) if q.modules[y][x]);logo=''
+        eyes=[(0,0),(n-7,0),(0,n-7)];rounded=config.get('eye_style')=='rounded'
+        inside=lambda x,y:any(ex<=x<ex+7 and ey<=y<ey+7 for ex,ey in eyes)
+        cells=''.join(f'<rect x="{x+4}" y="{y+4}" width="1" height="1"/>' for y in range(n) for x in range(n) if q.modules[y][x] and not (rounded and inside(x,y)))
+        if rounded:
+            for ex,ey in eyes:
+                for inset,size,fill,rx in [(0,7,fg,.7),(1,5,bg,.4),(2,3,fg,.3)]:cells+=f'<rect x="{ex+4+inset}" y="{ey+4+inset}" width="{size}" height="{size}" fill="{fill}" rx="{rx}"/>'
+        logo=''
         if config.get('logo'):
             key=company(c,tenant).get('logo');a=c.execute("SELECT storage_key FROM assets WHERE tenant_id=? AND storage_key=? AND visibility='public'",(tenant,key)).fetchone()
             if a:

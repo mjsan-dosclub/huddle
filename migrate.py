@@ -56,7 +56,8 @@ def apply(app):
         apply_surfaces(app,c)
 
 def apply_surfaces(app,c):
-    if c.execute('SELECT 1 FROM schema_migrations WHERE version=2').fetchone():return
+    if c.execute('SELECT 1 FROM schema_migrations WHERE version=2').fetchone():
+        apply_monetization(app,c);return
     c.executescript((app.ROOT/'migrations/002_auth_surfaces.sql').read_text())
     columns={r[1] for r in c.execute('PRAGMA table_info(sessions)')}
     for name,definition in [('mfa_tenant','TEXT'),('mfa_at','INTEGER NOT NULL DEFAULT 0'),('authenticated_at','INTEGER NOT NULL DEFAULT 0')]:
@@ -69,8 +70,13 @@ def apply_surfaces(app,c):
             data={**policy,'layout':layout,'accent':accent}
             c.execute('INSERT INTO templates VALUES(?,?,?,?,?)',(app.uid(),org['id'],name,app.dump(data),app.now()))
     c.execute('INSERT INTO schema_migrations VALUES(2,?)',(app.now(),))
+    apply_monetization(app,c)
+
+
+def apply_monetization(app,c):
+    if not c.execute('SELECT 1 FROM schema_migrations WHERE version=3').fetchone():c.executescript('BEGIN IMMEDIATE;\n'+(app.ROOT/'migrations/003_monetization.sql').read_text()+'\nCOMMIT;')
 
 if __name__=='__main__':
     import server
     apply(server)
-    print('Migration complete; original hello.sqlite3 retained.')
+    print('Migration complete.')

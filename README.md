@@ -59,3 +59,6 @@ Do not point the PostgreSQL test command at a real project. It intentionally rej
 ## Release limits
 
 Images are limited to 3 MB and workbooks to 2 MB to fit Vercel's base64 request limit. Existing Android 0.6 clients can still connect but should update for the matching client-side image limit. The recipient PWA caches static resources only; profiles and contact exchange need connectivity. Wallet signing, CRM sync, SCIM, billing and native Google OAuth are not implemented. Google web login and Resend require provider configuration. Physical NFC writing must be checked with real hardware.
+
+
+Platform operations and billing (0.7): see [the implementation and rollout guide](docs/MONETIZATION.md). New organizations are Free; pre-existing organizations receive a 90-day compatibility grant. Founder access is separately provisioned, never granted by signup.

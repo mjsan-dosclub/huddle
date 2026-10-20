@@ -52,8 +52,10 @@ class SurfaceSecurityTests(unittest.TestCase):
         secret,_=self.enroll();r=self.call('/api/login','POST',{'email':self.address,'password':self.password});token=r[1]['challenge']
         for _ in range(6):self.assertEqual(self.call('/api/auth/verify','POST',{'challenge':token,'code':'bad'})[0],403)
         with app.connection() as c:self.assertEqual(c.execute('SELECT attempts FROM auth_challenges WHERE token_hash=?',(hashlib.sha256(token.encode()).hexdigest(),)).fetchone()[0],6)
-        self.assertEqual(self.call('/api/auth/verify','POST',{'challenge':token,'code':security.totp(secret)})[0],403)
-        with app.connection() as c:self.assertFalse(security.verify(app,c,self.tenant,self.member,security.totp(secret)))
+        with app.connection() as c:consumed=c.execute('SELECT last_counter FROM user_security WHERE tenant_id=? AND user_id=?',(self.tenant,self.member)).fetchone()[0]
+        replayed_code=security.totp(secret,consumed*30)
+        self.assertEqual(self.call('/api/auth/verify','POST',{'challenge':token,'code':replayed_code})[0],403)
+        with app.connection() as c:self.assertFalse(security.verify(app,c,self.tenant,self.member,replayed_code))
     def test_sensitive_actions_require_recent_mfa(self):
         _,codes=self.enroll()
         with app.connection() as c:c.execute('UPDATE sessions SET mfa_at=0 WHERE account_id=(SELECT account_id FROM users WHERE tenant_id=? AND id=?)',(self.tenant,self.member))
