@@ -1,4 +1,4 @@
-# HUDDLE Admin for Android 0.6.1
+# HUDDLE Admin for Android 0.8.0
 
 Native Android views and NFC reader mode; no WebView. Source package `com.hello.cards.admin` remains stable for existing installs. The app supports email/password and authenticator/recovery-code login, organization switching, member/card management, branding/templates, leads, analytics, spreadsheet onboarding and NFC preparation/write/read-back.
 
@@ -13,3 +13,11 @@ Install JDK 17, Android SDK platform 35 and build-tools 35.0.1. Set `ANDROID_SDK
 Build intermediates and the generated debug signing key stay in `android/build` (ignored). Set `HELLO_ANDROID_BUILD_DIR` to your existing private build folder to preserve the old development signing key. Never commit or distribute a signing key. The generated APK is copied to `downloads/hello-admin-debug.apk` for the web download route; root APK aliases are ignored by Git.
 
 These are test APKs, not Play Store release builds. Use a private production signing workflow and review release/distribution requirements before store submission. Cleartext HTTP remains available for local development testing only. Images are capped at 3 MB to match the Vercel API.
+
+## 0.8.0 — theme and first-run introduction
+
+HUDDLE’s light red/cream theme now covers native controls, navigation, launch background and the h* icon. The first-run introduction supports swipe, page dots, Back, Next and Skip; replay it from Manage → App settings → Explore HUDDLE. Workspace loading reflects the actual connection request, with retry on failure rather than a timed splash. New installs default to the current canonical Vercel origin; existing configured origins and sessions are preserved.
+
+The organization selector displays the server ownership allowance (Free 2 / Pro 5 / Enterprise 20). Membership invitations do not consume this allowance; new organizations start Free. Existing organizations are preserved when a limit is exceeded or paid access expires.
+
+This APK remains a signed development build. NFC writes/readback need testing on a physical NFC-enabled Android device; the emulator cannot validate physical tag operations. Apple and Google Wallet remain unavailable scaffolds.

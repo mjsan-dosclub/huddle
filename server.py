@@ -114,6 +114,7 @@ def add_user(c,tenant,data,password=None,role='member',account_id=None):
 def create_org(c,name,account_id,person_name='',demo_grant=False):
     name=text(name)
     if not name:raise Problem('Enter an organization name.')
+    billing.organization_capacity(sys.modules[__name__],c,account_id,enforce=True)
     tenant=uid();slug=re.sub(r'[^a-z0-9]+','-',name.lower()).strip('-')[:45]+'-'+tenant[:6]
     brand={'name':name,'tagline':'Every introduction matters.','description':'','logo':'','logo_scale':100,'background':'#164e40','images':[],'email_domain':'','website':'','allow_employee_banners':True,'analytics_salt':secrets.token_hex(32),'qr':{'foreground':'#164e40','background':'#ffffff','logo':False,'frame':'Scan to connect'}}
     c.execute('INSERT INTO organizations VALUES(?,?,?,?,?,?)',(tenant,name,slug,'active',dump(brand),now()))
@@ -422,7 +423,7 @@ class Handler(BaseHTTPRequestHandler):
             actor=self.actor(c);tenant=actor['tenant_id'];admin=actor['role'] in ('owner','admin')
             if (method!='GET' or path.endswith('/export')) and path not in ('/api/share',) and not security.recent(sys.modules[__name__],c,self,actor):
                 self.send(403,{'error':'Verify your authenticator to continue.','elevation_required':True});return
-            if path=='/api/organizations' and method=='GET':return {'organizations':[dict(r) for r in c.execute("SELECT o.id,o.name,o.slug,u.role FROM users u JOIN organizations o ON o.id=u.tenant_id WHERE u.account_id=? AND u.active=1 AND o.status='active'",(actor['account_id'],))],'active_tenant_id':tenant}
+            if path=='/api/organizations' and method=='GET':return {'organizations':[dict(r) for r in c.execute("SELECT o.id,o.name,o.slug,u.role FROM users u JOIN organizations o ON o.id=u.tenant_id WHERE u.account_id=? AND u.active=1 AND o.status='active'",(actor['account_id'],))],'active_tenant_id':tenant,'ownership':billing.organization_capacity(sys.modules[__name__],c,actor['account_id'])}
             if path=='/api/organizations' and method=='POST':
                 d=self.body();new=create_org(c,d.get('name'),actor['account_id'],actor.get('name'));return {'id':new}
             if path=='/api/organizations/switch' and method=='POST':

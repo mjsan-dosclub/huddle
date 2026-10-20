@@ -13,3 +13,5 @@
 @media(forced-colors:active){.hero h1 em,.section h1 em,.section h2 em{background:none;-webkit-text-fill-color:CanvasText;color:CanvasText}}
 
 .start-label-short{display:none}@media(max-width:800px){.start-label-full{display:none}.start-label-short{display:inline}.nav-actions .button{gap:12px}}
+
+.impact-method{margin-top:28px;font-size:13px;line-height:1.7;color:#716560}.impact-method summary{cursor:pointer;font-weight:700;color:#252020}.impact-method p{font-size:13px;letter-spacing:0}.calculator-result .result-metrics{flex-wrap:wrap;gap:24px}.calculator-result .result-metrics>div{flex:1;min-width:130px}.calculator-result>p{letter-spacing:.08em}
