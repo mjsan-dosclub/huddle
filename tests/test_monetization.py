@@ -125,6 +125,130 @@ class MonetizationTests(unittest.TestCase):
         self.assertEqual(self.client.get('/api/platform/tenants?page=invalid').status_code,400)
         for path in ('/super-admin/organizations/'+self.tenant,'/super-admin/packages/free','/super-admin/audit'):
             self.assertEqual(self.client.get(path).status_code,200);self.assertEqual(self.other.get(path).status_code,404)
+    def test_india_offers_preserve_legacy_billing_and_package_allowances(self):
+        catalog=self.client.get('/api/public/plans').json
+        self.assertEqual([o['plan_id'] for o in catalog['offers']],['free','pro-individual','pro-workspace','enterprise'])
+        by_id={p['id']:p for p in catalog['plans']}
+        self.assertEqual(by_id['pro-individual']['entitlements']['max_cards'],3)
+        self.assertEqual(by_id['pro-individual']['entitlements']['max_seats'],1)
+        self.assertEqual(by_id['pro-workspace']['entitlements']['max_cards'],50)
+        self.assertEqual(by_id['pro-workspace']['entitlements']['max_seats'],10)
+        self.assertEqual(by_id['pro']['entitlements']['max_cards'],10)
+        sid=self.subscription(status='ACTIVE',end=app.now()+86400)
+        with app.connection() as c:
+            before=dict(c.execute('SELECT * FROM subscriptions WHERE id=?',(sid,)).fetchone())
+            legacy=dict(c.execute("SELECT * FROM plan_prices WHERE id='enterprise-monthly'").fetchone())
+        import migrate
+        migrate.apply(app)
+        with app.connection() as c:
+            self.assertEqual(dict(c.execute('SELECT * FROM subscriptions WHERE id=?',(sid,)).fetchone()),before)
+            self.assertEqual(dict(c.execute("SELECT * FROM plan_prices WHERE id='enterprise-monthly'").fetchone()),legacy)
+        self.assertFalse(any(p['plan_id']=='enterprise' for p in catalog['prices']))
+
+    def test_published_offer_selection_updates_catalogue_without_repricing_subscriptions(self):
+        sid=self.subscription(status='ACTIVE',end=app.now()+86400)
+        self.platform()
+        payload={'id':'individual-revised-monthly','plan_id':'pro-individual','interval':'monthly','amount_paise':17900,'reason':'Test published individual price'}
+        self.assertEqual(self.client.post('/api/platform/prices',json=payload).status_code,200)
+        offer=next(o for o in self.client.get('/api/platform/prices').json['offers'] if o['plan_id']=='pro-individual')
+        update={**offer,'monthly_price_id':payload['id'],'reason':'Publish tested individual offer'}
+        url='/api/platform/pricing-offers/pro-individual'
+        self.assertEqual(self.other.put(url,json=update).status_code,404)
+        self.assertEqual(self.client.put(url,json=update).status_code,200)
+        public=next(o for o in self.other.get('/api/public/plans').json['offers'] if o['plan_id']=='pro-individual')
+        self.assertEqual(public['monthly_price_id'],payload['id'])
+        self.assertEqual(self.client.put(url,json=update).status_code,409)
+        with app.connection() as c:
+            self.assertEqual(c.execute('SELECT price_id FROM subscriptions WHERE id=?',(sid,)).fetchone()[0],'pro-monthly')
+            self.assertEqual(c.execute("SELECT amount_paise FROM plan_prices WHERE id='pro-monthly'").fetchone()[0],49900)
+            self.assertEqual(c.execute("SELECT count(*) FROM platform_audit WHERE action='billing.offer_updated'").fetchone()[0],1)
+
+    def test_published_offer_rejects_cross_package_or_retired_price(self):
+        self.platform()
+        offer=next(o for o in self.client.get('/api/platform/prices').json['offers'] if o['plan_id']=='pro-individual')
+        base={**offer,'reason':'Validate published offer guard'}
+        for bad in ('pro-monthly','enterprise-monthly','pro-individual-annual','missing'):
+            self.assertEqual(self.client.put('/api/platform/pricing-offers/pro-individual',json={**base,'monthly_price_id':bad}).status_code,400)
+        self.client.post('/api/platform/prices/pro-individual-monthly',json={'active':False,'reason':'Retire individual price fixture'})
+        self.assertEqual(self.client.put('/api/platform/pricing-offers/pro-individual',json=base).status_code,400)
+
+    def test_enterprise_quote_terms_are_versioned_and_public(self):
+        self.platform();url='/api/platform/pricing-offers/enterprise'
+        offer=next(o for o in self.client.get('/api/platform/prices').json['offers'] if o['plan_id']=='enterprise')
+        payload={**offer,'quote_annual_seat_paise':129900,'minimum_seats':30,'cards_per_seat':6,'reason':'Revise Enterprise quote terms'}
+        for key in ('minimum_seats','cards_per_seat','quote_annual_seat_paise'):
+            self.assertEqual(self.client.put(url,json={**payload,key:True}).status_code,400)
+        self.assertEqual(self.client.put(url,json=payload).status_code,200)
+        current=next(o for o in self.other.get('/api/public/plans').json['offers'] if o['plan_id']=='enterprise')
+        self.assertEqual((current['minimum_seats'],current['quote_annual_seat_paise']),(30,129900))
+
+    def test_quote_requires_consent_and_is_visible_only_to_elevated_platform_owner(self):
+        visitor=web.test_client();url='/api/public/enterprise-quotes'
+        data={'name':'Arun Kumar','email':'arun@example.com','company':'Kaveri Industrial Supplies','seats':25,'message':'A Chennai pilot','consent':True}
+        self.assertEqual(visitor.post(url,json={**data,'consent':False}).status_code,400)
+        self.assertEqual(visitor.post(url,json={**data,'seats':24}).status_code,400)
+        self.assertEqual(visitor.post(url,json={**data,'seats':True}).status_code,400)
+        self.assertEqual(visitor.post(url,json=data).status_code,200)
+        self.assertEqual(visitor.get('/api/platform/quote-requests').status_code,404)
+        self.assertEqual(self.client.get('/api/platform/quote-requests').status_code,404)
+        self.platform();quotes=self.client.get('/api/platform/quote-requests').json['requests']
+        self.assertEqual(len(quotes),1);self.assertEqual(quotes[0]['email'],data['email'])
+        self.assertEqual(quotes[0]['consent_version'],'sales-enquiry-v2')
+        with app.connection() as c:self.assertEqual(c.execute('SELECT count(*) FROM payments').fetchone()[0],0)
+        self.assertEqual(visitor.post(url,json=data).status_code,200)
+        self.assertEqual(visitor.post(url,json=data).status_code,429)
+
+    def test_individual_checkout_uses_its_own_package_and_enforces_three_cards(self):
+        self.gateway_env();os.environ['RAZORPAY_PLAN_PRO_INDIVIDUAL_MONTHLY']='plan_individual'
+        calls=[]
+        def provider(app,path,payload=None):
+            calls.append((path,payload))
+            if path=='plans/plan_individual':return {'item':{'amount':14900,'currency':'INR'},'period':'monthly','interval':1}
+            return {'id':'sub_individual','status':'created','short_url':'https://rzp.io/i/fixture'}
+        with patch.object(billing,'gateway',side_effect=provider):
+            result=self.client.post('/api/billing/checkout',json={'price_id':'pro-individual-monthly','amount_paise':1,'plan':'enterprise'})
+        self.assertEqual(result.status_code,200,result.json)
+        self.assertEqual(calls[-1][1]['quantity'],1)
+        with app.connection() as c:
+            sub=c.execute("SELECT plan_id,price_id FROM subscriptions WHERE provider_subscription_id='sub_individual'").fetchone()
+            self.assertEqual((sub['plan_id'],sub['price_id']),('pro-individual','pro-individual-monthly'))
+        self.grant('pro-individual')
+        for persona in ('Consulting','Community'):
+            self.assertEqual(self.client.post('/api/cards',json={'persona':persona}).status_code,200)
+        self.assertEqual(self.client.post('/api/cards',json={'persona':'Fourth'}).status_code,402)
+        self.assertEqual(self.client.post('/api/invitations',json={'name':'Colleague','email':'colleague@example.com'}).status_code,402)
+
+    def test_enterprise_checkout_is_quote_only_before_calling_provider(self):
+        self.gateway_env()
+        with patch.object(billing,'gateway',side_effect=AssertionError('Enterprise must not call provider')):
+            result=self.client.post('/api/billing/checkout',json={'price_id':'enterprise-monthly'})
+        self.assertEqual(result.status_code,409,result.json)
+        self.assertIn('quote',result.json['error'])
+
+    def test_structured_enquiry_validation_and_private_inbox(self):
+        data={'name':'Meera Nair','email':'meera@example.com','company':'Malabar Studio','seats':30,'consent':True,'phone':'+91 98765 43210','job_title':'Sales director','company_website':'https://example.com','industry':'Manufacturing','location':'Chennai, India','timeline':'1-3-months','hardware':'buy-cards','nfc_quantity':30,'needs':['branding','nfc']}
+        r=self.client.post('/api/public/enterprise-quotes',json=data);self.assertEqual(r.status_code,200,r.json);reference=r.json['reference']
+        self.platform();q=self.client.get('/api/platform/quote-requests').json['requests'][0]
+        self.assertEqual(q['id'],reference);self.assertEqual(q['details']['nfc_quantity'],30);self.assertEqual(q['details']['location'],'Chennai, India')
+        for bad in ({'needs':['unknown']},{'nfc_quantity':True},{'phone':'not-a-number'},{'company_website':'javascript:alert(1)'}):
+            app.RATE.clear();self.assertEqual(self.other.post('/api/public/enterprise-quotes',json={**data,**bad}).status_code,400)
+        with app.connection() as c:self.assertEqual(c.execute('SELECT count(*) FROM enterprise_quote_requests').fetchone()[0],1)
+    def test_hardware_enquiry_separate_from_enterprise_minimum_and_no_subscription(self):
+        with app.connection() as c:before=c.execute('SELECT count(*) FROM subscriptions').fetchone()[0]
+        data={'name':'Kavin','email':'kavin@example.com','company':'Marina Works','seats':1,'consent':True,'request_type':'nfc','hardware':'buy-cards','nfc_quantity':1}
+        self.assertEqual(self.client.post('/api/public/enterprise-quotes',json=data).status_code,200)
+        self.assertEqual(self.client.post('/api/public/enterprise-quotes',json={**data,'request_type':'enterprise'}).status_code,400)
+        self.assertEqual(self.client.post('/api/public/enterprise-quotes',json={**data,'nfc_quantity':0}).status_code,400)
+        with app.connection() as c:
+            self.assertEqual(c.execute('SELECT count(*) FROM subscriptions').fetchone()[0],before)
+            self.assertEqual(c.execute('SELECT count(*) FROM payments').fetchone()[0],0)
+    def test_public_company_policies_and_nfc_route(self):
+        for path in ('/terms','/privacy','/data-protection','/refunds','/shipping','/contact','/about'):
+            r=self.other.get(path);self.assertEqual(r.status_code,200);self.assertIn(b'Touchmark Descience',r.data);self.assertIn(b'info@touchmarkdes.com',r.data)
+        self.assertIn(b'33AAGCT9408C1ZI',self.other.get('/contact').data)
+        self.assertIn(b'duplicate payments',self.other.get('/refunds').data)
+        self.assertEqual(self.other.get('/nfc-cards').status_code,200)
+
     def platform(self):
         with app.connection() as c:c.execute('INSERT INTO platform_admin_grants VALUES(?,?,?,?)',(self.aid,app.now(),'test','Provisioned test operator'))
         r=self.client.post('/api/platform/mfa/setup',json={'password':self.password});self.assertEqual(r.status_code,200,r.json);secret=r.json['secret']

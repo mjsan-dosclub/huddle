@@ -75,7 +75,8 @@ def apply_surfaces(app,c):
 
 def apply_monetization(app,c):
     if not c.execute('SELECT 1 FROM schema_migrations WHERE version=3').fetchone():c.executescript('BEGIN IMMEDIATE;\n'+(app.ROOT/'migrations/003_monetization.sql').read_text()+'\nCOMMIT;')
-    if not c.execute('SELECT 1 FROM schema_migrations WHERE version=4').fetchone():c.executescript('BEGIN IMMEDIATE;\n'+(app.ROOT/'migrations/004_package_policy.sql').read_text()+'\nCOMMIT;')
+    for version,filename in [(4,'004_package_policy.sql'),(5,'005_india_pricing.sql'),(6,'006_sales_enquiries.sql')]:
+        if not c.execute('SELECT 1 FROM schema_migrations WHERE version=?',(version,)).fetchone():c.executescript('BEGIN IMMEDIATE;\n'+(app.ROOT/'migrations'/filename).read_text()+'\nCOMMIT;')
 
 if __name__=='__main__':
     import server

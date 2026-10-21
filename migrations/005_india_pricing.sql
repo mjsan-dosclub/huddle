@@ -1,0 +1,15 @@
+-- Add new offers without rewriting any existing plan, price or subscription.
+CREATE TABLE pricing_offers(plan_id TEXT PRIMARY KEY REFERENCES plans(id),version INTEGER NOT NULL DEFAULT 1,monthly_price_id TEXT REFERENCES plan_prices(id),annual_price_id TEXT REFERENCES plan_prices(id),quote_annual_seat_paise INTEGER,minimum_seats INTEGER,cards_per_seat INTEGER);
+CREATE TABLE enterprise_quote_requests(id TEXT PRIMARY KEY,name TEXT NOT NULL,email TEXT NOT NULL,company TEXT NOT NULL,seats INTEGER NOT NULL,message TEXT NOT NULL,consent_version TEXT NOT NULL,created INTEGER NOT NULL);
+CREATE INDEX quote_request_date ON enterprise_quote_requests(created,id);
+INSERT INTO plans VALUES('pro-individual','Pro individual',1,'{"max_cards": 3, "max_seats": 1, "max_admins": 1, "max_owned_organizations": 5, "custom_branding": true, "custom_qr": true, "remove_branding": false, "lead_capture": true, "lead_export": true, "bulk_import": false, "wallet": false}');
+INSERT INTO plans VALUES('pro-workspace','Pro workspace',1,'{"max_cards": 50, "max_seats": 10, "max_admins": 10, "max_owned_organizations": 5, "custom_branding": true, "custom_qr": true, "remove_branding": false, "lead_capture": true, "lead_export": true, "bulk_import": true, "wallet": false}');
+INSERT INTO plan_prices VALUES('pro-individual-monthly','pro-individual','monthly',14900,'INR',1);
+INSERT INTO plan_prices VALUES('pro-individual-annual','pro-individual','annual',149900,'INR',1);
+INSERT INTO plan_prices VALUES('pro-workspace-monthly','pro-workspace','monthly',49900,'INR',1);
+INSERT INTO plan_prices VALUES('pro-workspace-annual','pro-workspace','annual',499900,'INR',1);
+INSERT INTO pricing_offers VALUES('free',1,NULL,NULL,NULL,NULL,NULL);
+INSERT INTO pricing_offers VALUES('pro-individual',1,'pro-individual-monthly','pro-individual-annual',NULL,NULL,NULL);
+INSERT INTO pricing_offers VALUES('pro-workspace',1,'pro-workspace-monthly','pro-workspace-annual',NULL,NULL,NULL);
+INSERT INTO pricing_offers VALUES('enterprise',1,NULL,NULL,99900,25,5);
+INSERT INTO schema_migrations VALUES(5,CAST(strftime('%s','now') AS INTEGER));
