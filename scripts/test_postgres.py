@@ -24,6 +24,24 @@ from cloud_migrate import apply
 # Use the actual production WSGI handler instead of the development HTTP server.
 fixtures.app.ThreadingHTTPServer=lambda address,handler:make_server(address[0],address[1],deployment.app)
 class PostgresDeploymentTests(unittest.TestCase):
+    def test_public_url_aliases_through_production_backend(self):
+        clients=[deployment.app.test_client(),deployment.app.test_client()];states=[]
+        for cl in clients:
+            r=cl.post('/api/register',json={'email':'urls-'+secrets.token_hex(5)+'@example.com','password':'LocalFixture!2026','name':'Mohanraaj G','organization':'URL scope'})
+            self.assertEqual(r.status_code,200,r.json);states.append(cl.get('/api/state').json)
+        first,other=clients;state=states[0];cid=state['cards'][0]['id'];legacy=state['user']['slug'].split('/')[-1]
+        namespace='url-org-'+secrets.token_hex(4)
+        self.assertEqual(first.put('/api/public-urls/organization',json={'namespace':namespace,'expected_namespace':state['organization']['slug']}).status_code,200)
+        current=first.get('/api/cards/'+cid+'/public-url').json
+        r=first.put('/api/cards/'+cid+'/public-url',json={'card_slug':'mohanraajg','expected_path':current['path']});self.assertEqual(r.status_code,200,r.json)
+        for path in (legacy,namespace+'/mohanraajg'):
+            self.assertEqual(other.get('/api/card/'+path).json['card_id'],cid)
+        self.assertEqual(other.put('/api/cards/'+cid+'/public-url',json={'card_slug':'takeover','expected_path':r.json['path']}).status_code,404)
+        self.assertEqual(other.put('/api/public-urls/organization',json={'namespace':namespace,'expected_namespace':states[1]['organization']['slug']}).status_code,409)
+        self.assertEqual(first.get('/api/card/'+namespace+'%252Fmohanraajg').status_code,404)
+        with fixtures.app.connection() as c:
+            rights=c.execute("SELECT has_table_privilege(current_user,'huddle.public_url_aliases','DELETE') AS deletable,has_column_privilege(current_user,'huddle.public_url_aliases','card_id','UPDATE') AS transferable,has_column_privilege(current_user,'huddle.card_url_settings','card_slug','UPDATE') AS editable").fetchone()
+            self.assertFalse(rights['deletable']);self.assertFalse(rights['transferable']);self.assertTrue(rights['editable'])
     def test_free_organization_creation_limit_is_enforced_through_postgres(self):
         client=deployment.app.test_client();address='org-limit-'+secrets.token_hex(5)+'@example.com'
         r=client.post('/api/register',json={'email':address,'password':'LocalFixture!2026','name':'Owner','organization':'First'})
@@ -121,6 +139,7 @@ class PostgresDeploymentTests(unittest.TestCase):
                 with psycopg.connect(target) as c:
                     self.assertEqual(c.execute('SELECT slug FROM huddle.cards WHERE id=%s',(card['id'],)).fetchone()[0],card['slug'])
                     self.assertEqual(c.execute('SELECT token FROM huddle.nfc_cards').fetchone()[0],'unchanged-import-token')
+                    self.assertEqual(c.execute('SELECT card_id FROM huddle.public_url_aliases WHERE path=%s',(card['slug'],)).fetchone()[0],card['id'])
                     self.assertEqual(c.execute('SELECT secret FROM huddle.user_security').fetchone()[0],secret)
                     self.assertEqual(c.execute('SELECT visibility FROM huddle.assets').fetchone()[0],'private')
                     self.assertEqual(c.execute('SELECT count(*) FROM huddle.sessions').fetchone()[0],0)

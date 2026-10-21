@@ -18,7 +18,11 @@ def run(source,apply=False):
         if c.execute('PRAGMA foreign_key_check').fetchall():raise RuntimeError('Source contains invalid relationships')
         if not c.execute('SELECT 1 FROM schema_migrations WHERE version=2').fetchone():raise RuntimeError('Upgrade the local source to schema 2 first')
         if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='subscriptions'").fetchone() and c.execute("SELECT 1 FROM subscriptions WHERE status!='FREE' OR mode!='none' LIMIT 1").fetchone():raise RuntimeError('This source contains billing history. Use a dedicated financial-data migration; the legacy importer will not discard it.')
-        counts={table:c.execute('SELECT count(*) FROM '+table).fetchone()[0] for table in TABLES}
+        url_tables=['public_namespaces','card_url_settings','public_url_aliases']
+        source_tables={r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if any(t in source_tables for t in url_tables) and not all(t in source_tables for t in url_tables):raise RuntimeError('Incomplete public URL schema in source')
+        tables=TABLES+(url_tables if all(t in source_tables for t in url_tables) else [])
+        counts={table:c.execute('SELECT count(*) FROM '+table).fetchone()[0] for table in tables}
         if not apply:
             print(json.dumps({'mode':'dry-run','rows':counts,'source_changed':False,'destination_changed':False}));return
         if c.execute('SELECT 1 FROM user_security WHERE secret IS NOT NULL OR pending_secret IS NOT NULL LIMIT 1').fetchone():
@@ -35,11 +39,16 @@ def run(source,apply=False):
             dest.execute('SELECT pg_advisory_xact_lock(721904610)')
             dest.execute('SET LOCAL search_path TO huddle, pg_catalog')
             if dest.execute('SELECT 1 FROM organizations LIMIT 1').fetchone():raise RuntimeError('Destination must be empty. Import before enabling registration')
-            for table in TABLES:
+            for table in tables:
                 for row in c.execute('SELECT * FROM '+table):
                     columns=list(row.keys())
                     query=sql.SQL('INSERT INTO {} ({}) VALUES ({})').format(sql.Identifier(table),sql.SQL(',').join(map(sql.Identifier,columns)),sql.SQL(',').join(sql.Placeholder() for _ in columns))
                     dest.execute(query,tuple(row))
+            if 'public_url_aliases' not in source_tables:
+                dest.execute('INSERT INTO public_namespaces SELECT slug,id,created FROM organizations')
+                dest.execute('INSERT INTO card_url_settings SELECT id,tenant_id,slug FROM cards')
+                dest.execute('INSERT INTO public_url_aliases SELECT slug,tenant_id,id,created FROM cards')
+                dest.execute("INSERT INTO public_url_aliases SELECT o.slug||'/'||c.slug,c.tenant_id,c.id,c.created FROM cards c JOIN organizations o ON o.id=c.tenant_id")
             # Imports occur after schema deployment, so explicitly preserve legacy access.
             import time,secrets
             stamp=int(time.time())

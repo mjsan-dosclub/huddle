@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """HUDDLE: organization-scoped cards, relationships and native Android API."""
-import security, surfaces, database, object_storage, billing, platform_admin
+import security, surfaces, database, object_storage, billing, platform_admin, public_urls
 import argparse,base64,csv,hashlib,hmac,html,io,json,mimetypes,os,re,secrets,sqlite3,sys,threading,time,urllib.error,urllib.parse,urllib.request,zipfile
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
@@ -83,7 +83,7 @@ def user_dict(c,row):
     d.update({k:row[k] for k in ('id','tenant_id','role','active','created','division_id')});d['email']=account['email']
     card=c.execute('SELECT * FROM cards WHERE tenant_id=? AND user_id=? AND is_default=1',(row['tenant_id'],row['id'])).fetchone()
     if card:
-        d.update(json.loads(card['data']));d.update(id=row['id'],tenant_id=row['tenant_id'],role=row['role'],active=row['active'],division_id=row['division_id'],slug=card['slug'],card_id=card['id'],template_id=card['template_id'])
+        d.update(json.loads(card['data']));d.update(id=row['id'],tenant_id=row['tenant_id'],role=row['role'],active=row['active'],division_id=row['division_id'],slug=public_urls.canonical(c,card),card_id=card['id'],template_id=card['template_id'])
     return d
 
 def create_card(c,tenant,user_id,data,persona='Executive',default=False,slug=None):
@@ -93,7 +93,7 @@ def create_card(c,tenant,user_id,data,persona='Executive',default=False,slug=Non
     profile={k:data.get(k,[] if k in ('banners','personal_links') else '') for k in FIELDS};profile['banner_mode']=data.get('banner_mode','company')
     cid=uid();slug=slug or re.sub(r'[^a-z0-9]+','-',text(profile['name']).lower()).strip('-')[:40]+'-'+secrets.token_hex(5)
     if default:c.execute('UPDATE cards SET is_default=0 WHERE tenant_id=? AND user_id=?',(tenant,user_id))
-    c.execute('INSERT INTO cards VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',(cid,tenant,user_id,tid,text(persona,60) or 'Executive',slug,dump(profile),'{}',int(default),1,now(),now()));return cid
+    c.execute('INSERT INTO cards VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',(cid,tenant,user_id,tid,text(persona,60) or 'Executive',slug,dump(profile),'{}',int(default),1,now(),now()));public_urls.new_card(sys.modules[__name__],c,tenant,cid,slug);return cid
 
 def add_user(c,tenant,data,password=None,role='member',account_id=None):
     if role not in ('owner','admin','member'):raise Problem('Choose Owner, Admin or Member.')
@@ -118,6 +118,7 @@ def create_org(c,name,account_id,person_name='',demo_grant=False):
     tenant=uid();slug=re.sub(r'[^a-z0-9]+','-',name.lower()).strip('-')[:45]+'-'+tenant[:6]
     brand={'name':name,'tagline':'Every introduction matters.','description':'','logo':'','logo_scale':100,'background':'#164e40','images':[],'email_domain':'','website':'','allow_employee_banners':True,'analytics_salt':secrets.token_hex(32),'qr':{'foreground':'#164e40','background':'#ffffff','logo':False,'frame':'Scan to connect'}}
     c.execute('INSERT INTO organizations VALUES(?,?,?,?,?,?)',(tenant,name,slug,'active',dump(brand),now()))
+    c.execute('INSERT INTO public_namespaces VALUES(?,?,?)',(slug,tenant,now()))
     c.execute('INSERT INTO subscriptions(id,tenant_id,plan_id,status,mode,created,updated) VALUES(?,?,?,?,?,?,?)',(uid(),tenant,'free','FREE','none',now(),now()))
     if demo_grant:c.execute('INSERT INTO entitlement_overrides VALUES(?,?,?,?,?,?,?,?,?)',(uid(),tenant,'enterprise','{}','Local demonstration grant','demo',now(),now()+90*86400,None))
     did=uid();c.execute('INSERT INTO divisions VALUES(?,?,?,?,?)',(did,tenant,'General',dump({'description':'','address':'','email':'','phone':'','socials':[]}),now()))
@@ -130,10 +131,8 @@ def create_org(c,name,account_id,person_name='',demo_grant=False):
 
 def signup_preferences(c,tenant,d):
     if d.get('handle'):
-        handle=text(d['handle'],50).lower()
-        if not re.fullmatch(r'[a-z0-9][a-z0-9-]{1,38}[a-z0-9]',handle) or handle in ('api','app','login','signup','dashboard','templates','pricing','features','static','manifest','sw'):raise Problem('Choose a valid card handle.')
-        if c.execute('SELECT 1 FROM cards WHERE slug=?',(handle,)).fetchone():raise Problem('This card handle is already claimed.',409)
-        c.execute('UPDATE cards SET slug=? WHERE tenant_id=? AND is_default=1',(handle,tenant))
+        card=c.execute('SELECT * FROM cards WHERE tenant_id=? AND is_default=1',(tenant,)).fetchone()
+        public_urls.legacy_handle(sys.modules[__name__],c,tenant,card['id'],d['handle'])
     if d.get('theme') in ('executive','mint','sunset'):
         theme=next((t for t in docs(c,'templates',tenant) if t['data']['layout']==d['theme']),None)
         if theme:c.execute('UPDATE cards SET template_id=? WHERE tenant_id=? AND is_default=1',(theme['id'],tenant))
@@ -154,7 +153,7 @@ def initialise(demo=False):
 
 def card_row(c,slug):
     # Explicit public capability resolution: no collection access by untrusted tenant IDs.
-    r=c.execute("SELECT ca.* FROM cards ca JOIN users u ON u.tenant_id=ca.tenant_id AND u.id=ca.user_id JOIN organizations o ON o.id=ca.tenant_id WHERE ca.slug=? AND ca.active=1 AND u.active=1 AND o.status='active'",(slug,)).fetchone()
+    r=c.execute("SELECT ca.* FROM cards ca JOIN users u ON u.tenant_id=ca.tenant_id AND u.id=ca.user_id JOIN organizations o ON o.id=ca.tenant_id JOIN public_url_aliases pa ON pa.tenant_id=ca.tenant_id AND pa.card_id=ca.id WHERE pa.path=? AND ca.active=1 AND u.active=1 AND o.status='active'",(public_urls.decode(sys.modules[__name__],slug),)).fetchone()
     if not r:raise Problem('This card is unavailable.',404)
     return r
 
@@ -170,7 +169,7 @@ def public_card(c,slug):
     banners=p.get('banners',[]) if p.get('banner_mode')=='personal' and brand['allow_employee_banners'] else brand['images']
     if 'banners' not in visible:banners=[]
     blocks=json.loads(r['blocks']);allowed=policy.get('allowed_blocks',['whatsapp','upi']);blocks={k:v for k,v in blocks.items() if k in allowed}
-    return {'profile':profile,'company':{k:brand[k] for k in ['name','tagline','description','logo','logo_scale','background','images','website','allow_employee_banners']},'division':dict(name=division['name'],**json.loads(division['data'])) if division else None,'template':{'name':t['name'],'layout':policy['layout'],'accent':policy['accent']},'slug':slug,'card_id':r['id'],'persona':r['persona'],'blocks':blocks,'banner_images':banners,'lead_capture':entitlement['lead_capture'],'show_huddle_branding':not entitlement['remove_branding']}
+    return {'profile':profile,'company':{k:brand[k] for k in ['name','tagline','description','logo','logo_scale','background','images','website','allow_employee_banners']},'division':dict(name=division['name'],**json.loads(division['data'])) if division else None,'template':{'name':t['name'],'layout':policy['layout'],'accent':policy['accent']},'slug':public_urls.canonical(c,r),'card_id':r['id'],'persona':r['persona'],'blocks':blocks,'banner_images':banners,'lead_capture':entitlement['lead_capture'],'show_huddle_branding':not entitlement['remove_branding']}
 
 def edit_card(c,actor,row,data):
     tenant=actor['tenant_id'];admin=actor['role'] in ('owner','admin')
@@ -306,6 +305,7 @@ class Handler(BaseHTTPRequestHandler):
         self._defer_response=True;self._pending_response=None
         try:
             path=urllib.parse.urlsplit(self.path).path
+            if not getattr(self,'path_decoded',False) and path.startswith(('/api/card/','/api/exchange/','/manifest/','/contact/','/qr/','/upi/','/c/')):path=urllib.parse.unquote(path)
             if method!='GET':
                 origin=self.headers.get('Origin');allowed={base_url(),'http://'+self.headers.get('Host',''),'https://'+self.headers.get('Host','')}
                 if origin and origin not in allowed:raise Problem('Cross-origin request rejected.',403)
@@ -382,24 +382,24 @@ class Handler(BaseHTTPRequestHandler):
             if not brand.get('email_domain') or address.split('@')[1]!=brand['email_domain'].lower():raise Problem('Ask your administrator for an invitation.',403)
             if not text(d.get('name')):raise Problem('Enter your name.')
             c.execute('INSERT INTO requests VALUES(?,?,?,?,?,?,?)',(uid(),tenant,address,dump({'name':text(d['name']),'title':text(d.get('title'))}),password_hash(d.get('password')),'pending',now()));return {'ok':True}
-        if method=='GET' and path.startswith('/api/card/'):return public_card(c,path.rsplit('/',1)[-1])
+        if method=='GET' and path.startswith('/api/card/'):return public_card(c,path[len('/api/card/'):])
         if method=='GET' and path.startswith('/n/'):
             r=c.execute("SELECT n.*,ca.slug FROM nfc_cards n JOIN cards ca ON ca.tenant_id=n.tenant_id AND ca.id=n.card_id WHERE n.token=? AND n.active=1",(path.rsplit('/',1)[-1],)).fetchone()
             if not r:raise Problem('NFC card unavailable.',404)
-            public_card(c,r['slug']);self.send(302,b'','text/plain',{'Location':'/c/'+r['slug']+'?via=nfc'});return
+            public_card(c,r['slug']);self.send(302,b'','text/plain',{'Location':'/c/'+public_urls.canonical(c,card_row(c,r['slug']))+'?via=nfc'});return
         if method=='POST' and path=='/api/activity':
             self.limited('activity',120);d=self.body();r=card_row(c,text(d.get('slug')));public_card(c,r['slug'])
             if d.get('kind') not in ('view','link_click'):raise Problem('Invalid event.')
             cookie=self.record_activity(c,r,d['kind'],d.get('source','link'),text(d.get('label'),40));self.send(200,{'ok':True},headers={'Set-Cookie':cookie} if cookie else None);return
         if method=='POST' and path.startswith('/api/exchange/'):
-            self.limited('leads',30);r=card_row(c,path.rsplit('/',1)[-1]);public_card(c,r['slug']);billing.require(sys.modules[__name__],c,r['tenant_id'],'lead_capture');d=self.body()
+            self.limited('leads',30);r=card_row(c,path[len('/api/exchange/'):]);public_card(c,r['slug']);billing.require(sys.modules[__name__],c,r['tenant_id'],'lead_capture');d=self.body()
             if d.get('website_trap'):return {'ok':True}
             if d.get('consent') is not True:raise Problem('Consent is required to share your details.')
             data={'name':text(d.get('name'),150),'email':email(d.get('email')),'phone':text(d.get('phone'),40),'company':text(d.get('company'),150),'message':text(d.get('message'),2000)}
             if not data['name']:raise Problem('Enter your name.')
             cid=uid();c.execute('INSERT INTO contact_exchanges VALUES(?,?,?,?,?,?,?,?,?)',(cid,r['tenant_id'],r['user_id'],r['id'],dump(data),'huddle-exchange-v1',now(),text(d.get('source') or 'card',20),now()));return {'ok':True}
         if method=='GET' and (path.startswith('/contact/') or path.startswith('/qr/') or path.startswith('/upi/')):
-            slug=path.rsplit('/',1)[-1].rsplit('.',1)[0];r=card_row(c,slug);card=public_card(c,slug)
+            slug=path.split('/',2)[2].rsplit('.',1)[0];r=card_row(c,slug);card=public_card(c,slug);slug=card['slug']
             if path.startswith('/contact/'):
                 p=card['profile'];esc=lambda v:str(v or '').replace('\\','\\\\').replace('\n','\\n').replace('\r','').replace(';','\\;').replace(',','\\,')
                 lines=['BEGIN:VCARD','VERSION:3.0','FN:'+esc(p.get('name')),'ORG:'+esc(card['company']['name']),'TITLE:'+esc(p.get('title'))]
@@ -412,7 +412,7 @@ class Handler(BaseHTTPRequestHandler):
                         if len((buf+char).encode())>72:folded.append(buf);buf=' '
                         buf+=char
                     folded.append(buf)
-                cookie=self.record_activity(c,r,'contact_download',self.query().get('via',['link'])[0]);self.send(200,'\r\n'.join(folded)+'\r\n','text/vcard; charset=utf-8',{'Content-Disposition':'attachment; filename="'+slug+'.vcf"',**({'Set-Cookie':cookie} if cookie else {})});return
+                cookie=self.record_activity(c,r,'contact_download',self.query().get('via',['link'])[0]);self.send(200,'\r\n'.join(folded)+'\r\n','text/vcard; charset=utf-8',{'Content-Disposition':'attachment; filename="'+slug.rsplit('/',1)[-1]+'.vcf"',**({'Set-Cookie':cookie} if cookie else {})});return
             target=base_url()+'/c/'+slug+'?via=qr';qrconfig=company(c,r['tenant_id']).get('qr',{}) if billing.effective(sys.modules[__name__],c,r['tenant_id'])['entitlements']['custom_qr'] else {}
             if path.startswith('/upi/'):
                 block=card['blocks'].get('upi')
@@ -426,6 +426,8 @@ class Handler(BaseHTTPRequestHandler):
             actor=self.actor(c);tenant=actor['tenant_id'];admin=actor['role'] in ('owner','admin')
             if (method!='GET' or path.endswith('/export')) and path not in ('/api/share',) and not security.recent(sys.modules[__name__],c,self,actor):
                 self.send(403,{'error':'Verify your authenticator to continue.','elevation_required':True});return
+            matched,result=public_urls.routes(sys.modules[__name__],self,c,actor,method,path)
+            if matched:return result
             if path=='/api/organizations' and method=='GET':return {'organizations':[dict(r) for r in c.execute("SELECT o.id,o.name,o.slug,u.role FROM users u JOIN organizations o ON o.id=u.tenant_id WHERE u.account_id=? AND u.active=1 AND o.status='active'",(actor['account_id'],))],'active_tenant_id':tenant,'ownership':billing.organization_capacity(sys.modules[__name__],c,actor['account_id'])}
             if path=='/api/organizations' and method=='POST':
                 d=self.body();new=create_org(c,d.get('name'),actor['account_id'],actor.get('name'));return {'id':new}
@@ -436,7 +438,7 @@ class Handler(BaseHTTPRequestHandler):
                 if security.enabled(c,target,member['id']):return security.challenge(sys.modules[__name__],c,member,'switch',{'session':self.token_hash()})
                 c.execute('UPDATE sessions SET active_tenant_id=? WHERE token_hash=? AND account_id=?',(target,self.token_hash(),actor['account_id']));return {'ok':True}
             if path=='/api/state' and method=='GET':
-                brand=company(c,tenant);brand={k:v for k,v in brand.items() if k!='analytics_salt'};result={'user':{k:v for k,v in actor.items() if k!='account_id'},'company':brand,'organization':{'id':tenant,'name':brand['name']},'divisions':docs(c,'divisions',tenant),'templates':docs(c,'templates',tenant),'invitation_capacity':billing.invitation_capacity(sys.modules[__name__],c,tenant) if admin else None,'base_url':base_url(),'platform_access':bool(c.execute('SELECT 1 FROM platform_admin_grants WHERE account_id=?',(actor['account_id'],)).fetchone()),'cards':self.cards(c,actor),'billing':billing.summary(sys.modules[__name__],c,tenant) if actor['role']=='owner' else {k:v for k,v in billing.effective(sys.modules[__name__],c,tenant).items() if k!='subscription'}}
+                brand=company(c,tenant);brand={k:v for k,v in brand.items() if k!='analytics_salt'};result={'user':{k:v for k,v in actor.items() if k!='account_id'},'company':brand,'organization':{'id':tenant,'name':brand['name'],'slug':c.execute('SELECT slug FROM organizations WHERE id=?',(tenant,)).fetchone()[0]},'divisions':docs(c,'divisions',tenant),'templates':docs(c,'templates',tenant),'invitation_capacity':billing.invitation_capacity(sys.modules[__name__],c,tenant) if admin else None,'base_url':base_url(),'platform_access':bool(c.execute('SELECT 1 FROM platform_admin_grants WHERE account_id=?',(actor['account_id'],)).fetchone()),'cards':self.cards(c,actor),'billing':billing.summary(sys.modules[__name__],c,tenant) if actor['role']=='owner' else {k:v for k,v in billing.effective(sys.modules[__name__],c,tenant).items() if k!='subscription'}}
                 if admin:
                     result['team']=[user_dict(c,r) for r in c.execute('SELECT * FROM users WHERE tenant_id=? ORDER BY created',(tenant,))]
                     result['invitations']=[{k:r[k] for k in ('id','email','status','delivery','created','expires')}|{'data':json.loads(r['data']),'url':security.app_origin(sys.modules[__name__])+'/accept?token='+r['token']} for r in c.execute('SELECT * FROM invitations WHERE tenant_id=? ORDER BY created DESC',(tenant,)) if actor['role']=='owner' or json.loads(r['data']).get('role')=='member']
@@ -467,7 +469,7 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith('/api/cards/') and (path.endswith('/signature') or path.endswith('/background.png')) and method=='GET':
                 row=scoped(c,'cards',tenant,path.split('/')[3])
                 if row['user_id']!=actor['id']:require_admin(actor)
-                model=public_card(c,row['slug']);profile=model['profile'];brand=model['company'];url=base_url()+'/c/'+row['slug']
+                model=public_card(c,row['slug']);profile=model['profile'];brand=model['company'];url=base_url()+'/c/'+model['slug']
                 if path.endswith('/signature'):
                     body='<table style="font-family:Arial,sans-serif;color:#164e40"><tr><td style="padding:16px"><strong>'+html.escape(profile.get('name',''))+'</strong><br>'+html.escape(profile.get('title',''))+'<br>'+html.escape(brand['name'])+'<br><a href="'+html.escape(url,quote=True)+'">Connect with me</a></td><td><img width="110" alt="Scan to connect" src="'+html.escape(base_url()+'/qr/'+row['slug']+'.png',quote=True)+'"></td></tr></table>'
                     self.send(200,body,'text/html; charset=utf-8',{'Content-Disposition':'attachment; filename="huddle-signature.html"'});return
@@ -501,7 +503,7 @@ class Handler(BaseHTTPRequestHandler):
                 else:r=c.execute('SELECT * FROM cards WHERE tenant_id=? AND user_id=? AND is_default=1',(tenant,d.get('user_id',actor['id']))).fetchone()
                 if not r:raise Problem('Card not found.',404)
                 if r['user_id']!=actor['id']:require_admin(actor)
-                public_card(c,r['slug']);self.record_activity(c,r,'share','staff');return {'url':base_url()+'/c/'+r['slug']}
+                public_card(c,r['slug']);self.record_activity(c,r,'share','staff');return {'url':base_url()+'/c/'+public_urls.canonical(c,r)}
             if path in ('/api/leads','/api/leads/export') and method=='GET':return self.leads(c,actor,path.endswith('/export'))
             if path in ('/api/analytics','/api/analytics/export') and method=='GET':return self.analytics(c,actor,path.endswith('/export'))
             require_admin(actor)
@@ -552,7 +554,7 @@ class Handler(BaseHTTPRequestHandler):
         raise Problem('Route not found.',404)
     def cards(self,c,actor):
         # Members never receive another member's persona collection.
-        return [{**dict(r),'data':json.loads(r['data']),'blocks':json.loads(r['blocks'])} for r in c.execute('SELECT * FROM cards WHERE tenant_id=? AND user_id=? ORDER BY is_default DESC,created',(actor['tenant_id'],actor['id']))]
+        return [{**dict(r),'slug':public_urls.canonical(c,r),'data':json.loads(r['data']),'blocks':json.loads(r['blocks'])} for r in c.execute('SELECT * FROM cards WHERE tenant_id=? AND user_id=? ORDER BY is_default DESC,created',(actor['tenant_id'],actor['id']))]
     def upload(self,c,actor,d):
         if d.get('purpose') not in ('photo','personal'):require_admin(actor)
         try:raw=base64.b64decode(d.get('data',''),validate=True)

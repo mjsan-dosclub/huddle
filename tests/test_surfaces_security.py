@@ -35,7 +35,7 @@ class SurfaceSecurityTests(unittest.TestCase):
     def test_handle_claim_and_theme_survive_signup(self):
         handle='claimed-'+secrets.token_hex(4);self.assertTrue(self.call('/api/public/handle?handle='+handle)[1]['available'])
         r=self.call('/api/register','POST',{'email':'claim.'+secrets.token_hex(5)+'@example.com','password':self.password,'name':'Claimant','organization':'Claim org','handle':handle,'theme':'sunset'});self.assertEqual(r[0],200,r)
-        state=self.call('/api/state',cookie=r[2])[1];self.assertEqual(state['user']['slug'],handle);self.assertEqual(self.call('/api/card/'+handle)[1]['template']['layout'],'sunset');self.assertFalse(self.call('/api/public/handle?handle='+handle)[1]['available'])
+        state=self.call('/api/state',cookie=r[2])[1];self.assertEqual(state['user']['slug'],state['organization']['slug']+'/'+handle);self.assertEqual(self.call('/api/card/'+handle)[1]['template']['layout'],'sunset');self.assertFalse(self.call('/api/public/handle?handle='+handle)[1]['available'])
         self.assertFalse(self.call('/api/public/handle?handle=dashboard')[1]['available'])
     def test_rfc6238_vectors(self):
         secret=base64.b32encode(b'12345678901234567890').decode().rstrip('=')
