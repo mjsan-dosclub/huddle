@@ -1,9 +1,10 @@
 """Operator control plane. Global grants never arise from tenant registration."""
 import base64,hashlib,hmac,json,re,secrets,urllib.parse
 from http.cookies import SimpleCookie
-import billing,security
+import billing,security,pricing
 
 AUDIT_LABELS={
+ 'billing.offer_updated':'Published pricing updated',
  'package.updated':'Package updated','tenant.plan_override':'Package access changed',
  'tenant.active':'Organization activated','tenant.paused':'Organization paused','tenant.suspended':'Organization suspended',
  'billing.price_created':'Price created','billing.price_availability':'Price availability changed',
@@ -118,12 +119,16 @@ def route(app,h,c,method,path):
         if updated.rowcount!=1:raise app.Problem('This package changed. Reload before saving.',409)
         audit(app,c,aid,'package.updated',reason=reason,details={'plan':pid,'before':current,'after':billing.plan(c,pid)})
         return True,{'ok':True,'package':billing.plan(c,pid)}
+    if path.startswith('/api/platform/pricing-offers/') and method=='PUT':
+        return True,pricing.update_offer(app,c,path.rsplit('/',1)[-1],h.body(),aid,audit)
+    if path=='/api/platform/quote-requests' and method=='GET':
+        return True,{'requests':[{**dict(r),'details':json.loads(r['details'])} for r in c.execute('SELECT * FROM enterprise_quote_requests ORDER BY created DESC,id DESC LIMIT 100')]}
     if path=='/api/platform/prices':
-        if method=='GET':return True,{'prices':[dict(r) for r in c.execute('SELECT * FROM plan_prices ORDER BY plan_id,amount_paise')]}
+        if method=='GET':return True,{'prices':[dict(r) for r in c.execute('SELECT * FROM plan_prices ORDER BY plan_id,amount_paise')],'offers':pricing.offers(c),'packages':[dict(r) for r in c.execute('SELECT id,name FROM plans ORDER BY name')]}
         if method=='POST':
             d=h.body();reason=app.text(d.get('reason'),1000);pid=d.get('id')
             if len(reason)<10:raise app.Problem('Enter a pricing change reason.')
-            if not isinstance(pid,str) or not re.fullmatch(r'[a-z][a-z0-9-]{2,59}',pid) or d.get('plan_id') not in ('pro','enterprise') or d.get('interval') not in ('monthly','annual'):raise app.Problem('Invalid price definition.')
+            if not isinstance(pid,str) or not re.fullmatch(r'[a-z][a-z0-9-]{2,59}',pid) or (d.get('plan_id')=='free' or not isinstance(d.get('plan_id'),str) or not billing.plan(c,d['plan_id'])) or d.get('interval') not in ('monthly','annual'):raise app.Problem('Invalid price definition.')
             amount=d.get('amount_paise')
             if type(amount)!=int or not 100<=amount<=100000000:raise app.Problem('Use a positive integer amount in paise.')
             c.execute('INSERT INTO plan_prices VALUES(?,?,?,?,?,1)',(pid,d['plan_id'],d['interval'],amount,'INR'))

@@ -20,3 +20,6 @@
  .workspace .profile-menu{position:relative}
  .workspace .main-content{padding-top:23px}
 }
+
+.signup-plan-options{grid-template-columns:repeat(2,minmax(0,1fr))}
+.signup-legal{display:block!important;font-size:12px;line-height:1.7;margin:18px 0}.signup-legal input{width:auto!important;display:inline!important;margin-right:7px}.signup-legal a{text-decoration:underline}

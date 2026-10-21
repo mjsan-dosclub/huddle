@@ -1,6 +1,6 @@
 """Tenant entitlements and Razorpay billing. Access is derived on every request."""
 import base64,hashlib,hmac,json,os,re,urllib.error,urllib.parse,urllib.request
-import security
+import security,pricing
 
 QUOTA_FIELDS = ("max_cards", "max_seats", "max_admins", "max_owned_organizations")
 
@@ -98,6 +98,7 @@ def checkout(app,h,c,actor,d):
     app.require_owner(actor);tenant=actor['tenant_id'];h.limited('checkout',8)
     price=c.execute('SELECT * FROM plan_prices WHERE id=? AND active=1',(d.get('price_id'),)).fetchone()
     if not price:raise app.Problem('Select an available price.')
+    if price['plan_id']=='enterprise':raise app.Problem('Enterprise is available by quote. Existing subscriptions can still be managed.',409)
     if not configured():raise app.Problem('Razorpay is not configured. Contact the platform owner.',503)
     # No client-provided amount, provider plan, tenant or callback URL is trusted.
     key='RAZORPAY_PLAN_'+price['id'].upper().replace('-','_')
@@ -205,7 +206,8 @@ def webhook(app,h,c):
 
 def routes(app,h,c,method,path):
     if path=='/api/webhooks/razorpay' and method=='POST':return True,webhook(app,h,c)
-    if path=='/api/public/plans' and method=='GET':return True,{'plans':[plan(c,p) for p in ('free','pro','enterprise')],'prices':prices(c),'checkout_configured':configured()}
+    if path=='/api/public/plans' and method=='GET':return True,{'plans':[plan(c,r['id']) for r in c.execute('SELECT id FROM plans')],'offers':pricing.offers(c),'enterprise_quote_url':os.environ.get('HUDDLE_PUBLIC_ORIGIN','').rstrip('/')+'/enterprise#request-quote','prices':[p for p in prices(c) if p['plan_id']!='enterprise'],'checkout_configured':configured()}
+    if path=='/api/public/enterprise-quotes' and method=='POST':return True,pricing.request_quote(app,h,c)
     if not path.startswith('/api/billing'):return False,None
     actor=h.actor(c);app.require_owner(actor);tenant=actor['tenant_id']
     if (method!='GET' or path.endswith('/receipts')) and not security.recent(app,c,h,actor):

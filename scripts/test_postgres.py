@@ -45,6 +45,21 @@ class PostgresDeploymentTests(unittest.TestCase):
         with fixtures.app.connection() as c:
             permissions=c.execute("SELECT has_column_privilege(current_user,'huddle.plans','entitlements','UPDATE') AS editable,has_table_privilege(current_user,'huddle.plans','DELETE') AS deletable,has_column_privilege(current_user,'huddle.plans','id','UPDATE') AS identity_editable").fetchone()
             self.assertTrue(permissions['editable']);self.assertFalse(permissions['deletable']);self.assertFalse(permissions['identity_editable'])
+    def test_india_pricing_and_quote_requests_through_backend_role(self):
+        client=deployment.app.test_client()
+        catalog=client.get('/api/public/plans').json
+        self.assertEqual([o['plan_id'] for o in catalog['offers']],['free','pro-individual','pro-workspace','enterprise'])
+        enterprise=next(o for o in catalog['offers'] if o['plan_id']=='enterprise')
+        self.assertEqual((enterprise['quote_annual_seat_paise'],enterprise['minimum_seats']),(99900,25))
+        data={'name':'Meera Nair','email':'meera@example.com','company':'Malabar Studio','seats':25,'consent':True}
+        self.assertEqual(client.post('/api/public/enterprise-quotes',json=data).status_code,200)
+        self.assertEqual(client.get('/api/platform/quote-requests').status_code,404)
+        with fixtures.app.connection() as c:
+            self.assertEqual(c.execute('SELECT consent_version FROM enterprise_quote_requests WHERE email=?',(data['email'],)).fetchone()[0],'sales-enquiry-v2')
+            self.assertEqual(c.execute("SELECT amount_paise FROM plan_prices WHERE id='enterprise-monthly'").fetchone()[0],249900)
+            permissions=c.execute("SELECT has_table_privilege(current_user,'huddle.pricing_offers','SELECT') AS readable,has_column_privilege(current_user,'huddle.pricing_offers','version','UPDATE') AS editable,has_column_privilege(current_user,'huddle.pricing_offers','plan_id','UPDATE') AS identity_editable,has_table_privilege(current_user,'huddle.enterprise_quote_requests','DELETE') AS deletable").fetchone()
+            self.assertTrue(permissions['readable']);self.assertTrue(permissions['editable']);self.assertFalse(permissions['identity_editable']);self.assertFalse(permissions['deletable'])
+
     def setUp(self):
         with fixtures.app.connection() as c:c.execute('DELETE FROM rate_limits')
     def test_optional_sqlite_import_preserves_links_mfa_and_private_assets(self):
