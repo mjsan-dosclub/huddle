@@ -1,3 +1,5 @@
+// Preserve path separators: edge routers do not consistently decode %2F.
+export const cardPath=value=>String(value??'').split('/').map(encodeURIComponent).join('/');
 // Shared rendering engine: workspace, public recipient page and marketing simulator.
 export const escapeHTML=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const e=escapeHTML;
