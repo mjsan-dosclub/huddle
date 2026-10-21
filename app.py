@@ -30,7 +30,7 @@ def configuration_errors():
 
 class RequestHandler(server.Handler):
     def __init__(self):
-        self.path=request.full_path.rstrip('?');self.command=request.method
+        self.path=request.full_path.rstrip('?');self.command=request.method;self.path_decoded=True
         self.headers=Message()
         for k,v in request.headers.items():self.headers[k]=v
         identity=request.remote_addr or 'unknown'

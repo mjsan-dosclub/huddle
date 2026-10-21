@@ -1,0 +1,9 @@
+CREATE TABLE public_namespaces(slug TEXT PRIMARY KEY,tenant_id TEXT NOT NULL REFERENCES organizations(id),created INTEGER NOT NULL,UNIQUE(tenant_id,slug));
+CREATE TABLE card_url_settings(card_id TEXT PRIMARY KEY,tenant_id TEXT NOT NULL,card_slug TEXT NOT NULL,UNIQUE(tenant_id,card_slug),FOREIGN KEY(tenant_id,card_id) REFERENCES cards(tenant_id,id));
+CREATE TABLE public_url_aliases(path TEXT PRIMARY KEY,tenant_id TEXT NOT NULL,card_id TEXT NOT NULL,created INTEGER NOT NULL,FOREIGN KEY(tenant_id,card_id) REFERENCES cards(tenant_id,id));
+CREATE INDEX public_alias_card ON public_url_aliases(tenant_id,card_id);
+INSERT INTO public_namespaces SELECT slug,id,created FROM organizations;
+INSERT INTO card_url_settings SELECT id,tenant_id,slug FROM cards;
+INSERT INTO public_url_aliases SELECT slug,tenant_id,id,created FROM cards;
+INSERT INTO public_url_aliases SELECT o.slug||'/'||c.slug,c.tenant_id,c.id,c.created FROM cards c JOIN organizations o ON o.id=c.tenant_id;
+INSERT INTO schema_migrations VALUES(8,CAST(strftime('%s','now') AS INTEGER));

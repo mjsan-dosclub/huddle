@@ -1,5 +1,6 @@
 """Public marketing, application and recipient routing without shared UI bundles."""
 import os,re,urllib.parse,html
+import public_urls
 
 def host(h):return urllib.parse.urlsplit('//'+h.headers.get('Host','')).hostname or ''
 def app_host(h):return host(h)==os.environ.get('HUDDLE_APP_HOST','app.huddle.co.in') or host(h).startswith('app.') and host(h).endswith('.localhost')
@@ -9,8 +10,8 @@ def serve(app,h,c,method,path):
     if path=='/api/public/config' and method=='GET':return True,config(app)
     if path=='/api/public/handle' and method=='GET':
         h.limited('handle',180);value=h.query().get('handle',[''])[0].lower()
-        valid=bool(re.fullmatch(r'[a-z0-9][a-z0-9-]{1,38}[a-z0-9]',value)) and value not in ('api','app','login','signup','dashboard','templates','pricing','features','static','manifest','sw')
-        available=valid and not c.execute('SELECT 1 FROM cards WHERE slug=?',(value,)).fetchone()
+        valid=public_urls.valid(value) and '--' not in value
+        available=valid and not c.execute('SELECT 1 FROM public_url_aliases WHERE path=?',(value,)).fetchone()
         return True,{'available':bool(available),'error':'' if available else 'Choose an available handle, 3–40 letters, digits or hyphens.'}
     if path=='/static/sample-qr.svg' and method=='GET':
         target=os.environ.get('HUDDLE_PUBLIC_ORIGIN',app.base_url()).rstrip('/')+'/'
@@ -33,14 +34,14 @@ def serve(app,h,c,method,path):
     if path=='/accept' and os.environ.get('HUDDLE_APP_ORIGIN') and not app_host(h):
         target=os.environ['HUDDLE_APP_ORIGIN'].rstrip('/')+'/accept?token='+urllib.parse.quote(h.query().get('token',[''])[0])
         h.send(302,b'','text/plain',{'Location':target});return True,None
-    if card_host(h) and re.fullmatch('/[a-zA-Z0-9-]+',path) and path not in ('/sw.js',):
+    if card_host(h) and re.fullmatch('/[a-zA-Z0-9-]+(?:/[a-zA-Z0-9-]+)?',path) and path not in ('/sw.js',):
         return document(app,h,'public-card.html')
     if path.startswith('/c/'):
         if path=='/c/sw.js':
             h.send(200,(app.ROOT/'static/card-sw.js').read_bytes(),'application/javascript',{'Service-Worker-Allowed':'/c/'});return True,None
         return document(app,h,'public-card.html')
     if path.startswith('/manifest/') and path.endswith('.webmanifest'):
-        slug=path.rsplit('/',1)[-1][:-12];app.public_card(c,slug)
+        slug=public_urls.decode(app,path[len('/manifest/'):-12]);card=app.public_card(c,slug);slug=card['slug']
         prefix='/' if card_host(h) else '/c/'
         h.send(200,{'name':'HUDDLE digital card','short_name':'HUDDLE','id':prefix+slug,'start_url':prefix+slug,'scope':prefix,'display':'standalone','theme_color':'#164e40','background_color':'#f7f8f4','icons':[{'src':'/static/huddle-icon-192.png','sizes':'192x192','type':'image/png','purpose':'any'},{'src':'/static/huddle-icon-512.png','sizes':'512x512','type':'image/png','purpose':'any maskable'}]},'application/manifest+json');return True,None
     if path in ('/','/pricing','/templates','/features','/enterprise','/nfc-cards') and not app_host(h):return document(app,h,'marketing.html')
