@@ -1,0 +1,12 @@
+ALTER TABLE enterprise_quote_requests ADD COLUMN stage TEXT NOT NULL DEFAULT 'new';
+ALTER TABLE enterprise_quote_requests ADD COLUMN assigned_to TEXT REFERENCES accounts(id);
+ALTER TABLE enterprise_quote_requests ADD COLUMN follow_up_at INTEGER;
+ALTER TABLE enterprise_quote_requests ADD COLUMN opened_at INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE enterprise_quote_requests ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE enterprise_quote_requests ADD COLUMN updated INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE sales_agent_grants(account_id TEXT PRIMARY KEY REFERENCES accounts(id),active INTEGER NOT NULL DEFAULT 1,created INTEGER NOT NULL,granted_by TEXT NOT NULL REFERENCES accounts(id));
+CREATE TABLE sales_enquiry_events(id TEXT PRIMARY KEY,enquiry_id TEXT NOT NULL REFERENCES enterprise_quote_requests(id),actor_id TEXT REFERENCES accounts(id),kind TEXT NOT NULL,mode TEXT NOT NULL DEFAULT '',outcome TEXT NOT NULL DEFAULT '',note TEXT NOT NULL DEFAULT '',stage TEXT NOT NULL,next_follow_up INTEGER,created INTEGER NOT NULL,ordinal INTEGER NOT NULL);
+CREATE INDEX sales_enquiry_scope ON enterprise_quote_requests(assigned_to,stage,follow_up_at);
+CREATE UNIQUE INDEX sales_event_history ON sales_enquiry_events(enquiry_id,ordinal);
+INSERT INTO sales_enquiry_events(id,enquiry_id,kind,note,stage,created,ordinal) SELECT id||'-received',id,'received','Enquiry received','new',created,1 FROM enterprise_quote_requests;
+INSERT INTO schema_migrations VALUES(7,CAST(strftime('%s','now') AS INTEGER));

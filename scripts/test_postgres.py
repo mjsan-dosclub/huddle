@@ -60,6 +60,28 @@ class PostgresDeploymentTests(unittest.TestCase):
             permissions=c.execute("SELECT has_table_privilege(current_user,'huddle.pricing_offers','SELECT') AS readable,has_column_privilege(current_user,'huddle.pricing_offers','version','UPDATE') AS editable,has_column_privilege(current_user,'huddle.pricing_offers','plan_id','UPDATE') AS identity_editable,has_table_privilege(current_user,'huddle.enterprise_quote_requests','DELETE') AS deletable").fetchone()
             self.assertTrue(permissions['readable']);self.assertTrue(permissions['editable']);self.assertFalse(permissions['identity_editable']);self.assertFalse(permissions['deletable'])
 
+    def test_sales_assignment_activity_and_append_only_history(self):
+        import security
+        client,address,state=self.billing_owner();agent,agent_address,agent_state=self.billing_owner()
+        with fixtures.app.connection() as c:
+            aid=c.execute('SELECT account_id FROM users WHERE tenant_id=?',(state['organization']['id'],)).fetchone()[0]
+            agent_id=c.execute('SELECT account_id FROM users WHERE tenant_id=?',(agent_state['organization']['id'],)).fetchone()[0]
+        with psycopg.connect(url) as admin:admin.execute('INSERT INTO huddle.platform_admin_grants VALUES(%s,%s,%s,%s)',(aid,fixtures.app.now(),'test','Sales test operator'))
+        setup=client.post('/api/platform/mfa/setup',json={'password':'BillingPg!2026'})
+        self.assertEqual(client.post('/api/platform/mfa/confirm',json={'password':'BillingPg!2026','code':security.totp(setup.json['secret'])}).status_code,200)
+        self.assertEqual(client.post('/api/sales/team',json={'email':agent_address,'active':True,'reason':'Dedicated sales assignment'}).status_code,200)
+        enquiry=client.post('/api/public/enterprise-quotes',json={'name':'Meera','email':'sales-pg@example.com','company':'Malabar Studio','seats':25,'consent':True}).json['reference']
+        self.assertEqual(agent.get('/api/sales/enquiries').json['total'],0)
+        self.assertEqual(client.post('/api/sales/enquiries/'+enquiry+'/assign',json={'version':1,'account_id':agent_id}).status_code,200)
+        self.assertEqual(agent.get('/api/sales/enquiries').json['total'],1)
+        v=agent.get('/api/sales/enquiries/'+enquiry).json['enquiry']['version']
+        self.assertEqual(agent.post('/api/sales/enquiries/'+enquiry+'/activity',json={'version':v,'mode':'phone','outcome':'callback','note':'Asked for a demo next week','stage':'demo','follow_up_at':fixtures.app.now()+86400}).status_code,200)
+        self.assertEqual(agent.get('/api/sales/enquiries/'+enquiry).json['event_total'],3)
+        self.assertEqual(agent.get('/api/platform/prices').status_code,404)
+        for statement in ('DELETE FROM sales_enquiry_events','UPDATE sales_enquiry_events SET note=note',"UPDATE enterprise_quote_requests SET email='altered@example.com'"):
+            with self.assertRaises(Exception):
+                with fixtures.app.connection() as c:c.execute(statement)
+
     def setUp(self):
         with fixtures.app.connection() as c:c.execute('DELETE FROM rate_limits')
     def test_optional_sqlite_import_preserves_links_mfa_and_private_assets(self):
