@@ -24,6 +24,30 @@ from cloud_migrate import apply
 # Use the actual production WSGI handler instead of the development HTTP server.
 fixtures.app.ThreadingHTTPServer=lambda address,handler:make_server(address[0],address[1],deployment.app)
 class PostgresDeploymentTests(unittest.TestCase):
+    def test_internal_staff_credentials_and_revocation_through_backend_role(self):
+        operator=deployment.app.test_client();address='staff-manager-'+secrets.token_hex(4)+'@example.com'
+        self.assertEqual(operator.post('/api/register',json={'email':address,'password':'LocalFixture!2026','name':'Owner','organization':'Staff manager QA'}).status_code,200)
+        with fixtures.app.connection() as c:aid=c.execute('SELECT id FROM accounts WHERE email=?',(address,)).fetchone()[0]
+        with psycopg.connect(url) as admin:
+            admin.execute("INSERT INTO huddle.platform_admin_grants VALUES(%s,1,'fixture','Local integration test')",(aid,))
+        setup=operator.post('/api/platform/mfa/setup',json={'password':'LocalFixture!2026'}).json
+        self.assertEqual(operator.post('/api/platform/mfa/confirm',json={'password':'LocalFixture!2026','code':__import__('security').totp(setup['secret'])}).status_code,200)
+        email='arun-'+secrets.token_hex(4)+'@huddleapp.in'
+        payload={'name':'Arun','email':email,'password':'InitialSales!2026','confirm_password':'InitialSales!2026','must_change':False,'reason':'Official internal sales QA'}
+        r=operator.post('/api/sales/team/provision',json=payload);self.assertEqual(r.status_code,200,r.json);self.assertNotIn('InitialSales',str(r.json))
+        staff=deployment.app.test_client();self.assertEqual(staff.post('/api/sales/auth/login',json={'email':email,'password':'InitialSales!2026'}).status_code,200)
+        self.assertEqual(staff.get('/api/state').status_code,401)
+        self.assertEqual(staff.get('/api/sales/enquiries').json['total'],0)
+        with fixtures.app.connection() as c:
+            account=c.execute('SELECT id FROM accounts WHERE email=?',(email,)).fetchone()[0]
+            self.assertEqual(c.execute('SELECT count(*) FROM users WHERE account_id=?',(account,)).fetchone()[0],0)
+            self.assertFalse(c.execute("SELECT has_table_privilege(current_user,'huddle.sales_staff_credentials','DELETE')").fetchone()[0])
+        reset={**payload,'version':1,'password':'ResetSales!2026','confirm_password':'ResetSales!2026'}
+        self.assertEqual(operator.post('/api/sales/team/'+account+'/password',json=reset).status_code,200)
+        self.assertEqual(staff.get('/api/sales/access').status_code,401)
+        self.assertEqual(staff.post('/api/sales/auth/login',json={'email':email,'password':'ResetSales!2026'}).status_code,200)
+        self.assertEqual(staff.post('/api/sales/auth/password',json={'current':'ResetSales!2026','password':'ChangedSales!2026','confirm_password':'ChangedSales!2026'}).status_code,200)
+        self.assertEqual(staff.get('/api/sales/access').status_code,401)
     def test_public_url_aliases_through_production_backend(self):
         clients=[deployment.app.test_client(),deployment.app.test_client()];states=[]
         for cl in clients:

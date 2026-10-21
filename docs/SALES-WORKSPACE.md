@@ -19,14 +19,19 @@ calls or support interactions.
 
 ## Access
 
-Elevated Super Admin manages all enquiries and sales access. In Sales enquiries →
-Sales team, enter an existing colleague's HUDDLE login email and a reason. This
-creates sales-only access, not a platform administrator. No invite email is sent.
-The colleague signs in at `/sales` and can read, update and export only assigned
-enquiries. They cannot assign enquiries, manage sales grants, billing or packages.
-Normal session, organization membership and MFA checks continue to apply. Revoking
-sales access immediately blocks this sales workspace; assignments remain for admin
-reassignment. No sales colleagues are provisioned by the migration.
+Elevated Super Admin manages all enquiries and sales access. In **Sales enquiries → Sales team**, create an internal login with name, work email and an initial password (12–256 characters). The administrator may require a password change on next sign-in; this is selected by default. No customer signup, organization, card, paid seat or subscription is created.
+
+Colleagues sign in at `/sales/login`. They can read, update and export only assigned enquiries. They cannot assign enquiries, manage other colleagues, billing or packages. The header includes Change password and Sign out. A required initial password change blocks enquiry APIs until completed. Password changes require the current staff password and sign out every staff session. Super Admin can reset a colleague's staff password, with a reason and the same optional next-sign-in change requirement. A reset does not reactivate removed access.
+
+Sales passwords are separate from customer passwords, even when the same email already belongs to a customer. An account identity row supports existing assignment/audit foreign keys, but internal credentials and sessions use separate private tables and a distinct HttpOnly, SameSite=Strict cookie (Secure in production). Sessions last eight hours and carry the credential version; reset, self-change and access revocation invalidate existing sessions. Passwords are hashed using the application's salted PBKDF2 implementation and are excluded from API results, lists and audit details. Provisioning or resetting a platform administrator's identity through this interface is blocked. Platform team-management actions still require elevated platform MFA.
+
+Older sales grants can continue using their existing customer session until an administrator creates internal credentials for that email. After that, sales access requires the separate internal login. Existing customer passwords, MFA and customer sessions are unaffected. No real colleague is automatically provisioned by a migration.
+
+### Sharing instructions
+
+Copy instructions is the default. After creation/reset, the administrator may explicitly include the initial password in the copied text. That password remains only in the current page's temporary state; the server does not return or retain it in plaintext. Closing/navigating removes the one-time sharing view. Later copies contain the sign-in URL/email and say the password is provided separately; forgotten passwords require a reset. Nothing opens or sends a WhatsApp message automatically.
+
+Email delivery is displayed as a disabled later option and rejected by the API. No email is sent in this release, including when Resend is configured for customer invitations. Enabling staff instruction emails requires a separate delivery workflow and review.
 
 ## Filters and export
 
@@ -40,7 +45,7 @@ Due state is a visual/filter feature; scheduled notifications are not implemente
 
 ## Release
 
-Apply `202610210007_sales_workflow.sql` with the checksummed runner before deploying.
+Apply all pending migrations with the checksummed runner before deploying. Migration 7 adds the sales workflow. Migration 9 adds private staff credentials/sessions, narrow credential UPDATE and session DELETE permissions; credential records cannot be deleted by the runtime.
 It grants limited workflow-column UPDATE on enquiries, sales-grant SELECT/INSERT
 and restricted UPDATE, and event SELECT/INSERT. Events have no backend UPDATE or
 DELETE privilege. All new tables use private-schema access and RLS; tenant Owners

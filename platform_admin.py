@@ -4,6 +4,7 @@ from http.cookies import SimpleCookie
 import billing,security,pricing
 
 AUDIT_LABELS={
+ 'sales.staff_created':'Internal sales login created','sales.staff_password_reset':'Sales password reset by administrator','sales.staff_password_changed':'Sales colleague changed password','sales.staff_login':'Sales colleague signed in',
  'sales.agent_access':'Sales colleague access changed','sales.export':'Sales enquiries exported','sales.open':'Enquiry opened','sales.activity':'Sales follow-up recorded','sales.assign':'Enquiry assignment changed',
  'billing.offer_updated':'Published pricing updated',
  'package.updated':'Package updated','tenant.plan_override':'Package access changed',

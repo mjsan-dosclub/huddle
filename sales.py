@@ -1,6 +1,6 @@
 """Platform sales workflow; global operators or explicitly assigned sales agents only."""
 import csv,io,json,re,datetime
-import platform_admin
+import platform_admin,sales_auth
 
 STAGES={'new':'New','opened':'Opened','contacted':'Contacted','follow-up':'Follow-up','demo':'Demo requested','won':'Won / onboarded','lost':'Closed / not interested'}
 MODES={'phone':'Phone call','email':'Email','whatsapp':'WhatsApp','meeting':'Meeting','internal':'Internal note'}
@@ -9,10 +9,13 @@ OUTCOMES={'contacted':'Spoke to customer','no-answer':'Did not pick up','callbac
 def identity(app,h,c):
     try:return {**platform_admin.identity(app,h,c),'manager':True}
     except app.Problem:pass
+    staff=sales_auth.identity(app,h,c)
+    if staff:return staff
     actor=h.actor(c)
     account=c.execute('SELECT a.id,a.email FROM sales_agent_grants g JOIN accounts a ON a.id=g.account_id WHERE g.account_id=? AND g.active=1 AND a.disabled IS NULL',(actor['account_id'],)).fetchone()
     if not account:raise app.Problem('Not found.',404)
-    return {**dict(account),'manager':False}
+    if c.execute('SELECT 1 FROM sales_staff_credentials WHERE account_id=?',(account['id'],)).fetchone():raise app.Problem('Use your internal sales login at /sales/login.',401)
+    return {**dict(account),'manager':False,'auth_kind':'customer','must_change':0}
 
 def number(app,value,default=0,maximum=1000000):
     try:n=int(value)
@@ -57,26 +60,35 @@ def scoped(app,c,actor,eid):
     return dict(row)
 
 def routes(app,h,c,method,path):
+    matched,result=sales_auth.public_routes(app,h,c,method,path)
+    if matched:return True,result
     if path=='/sales' or path.startswith('/sales/'):
         if method!='GET':return False,None
         try:identity(app,h,c)
         except app.Problem as error:
             if error.code==401:
-                h.send(302,b'','text/plain',{'Location':'/app/login?next=/sales'});return True,None
+                h.send(302,b'','text/plain',{'Location':'/sales/login'});return True,None
             raise
         h.send(200,(app.ROOT/'static/sales.html').read_bytes(),'text/html; charset=utf-8');return True,None
     if not path.startswith('/api/sales'):return False,None
     actor=identity(app,h,c)
-    if path=='/api/sales/access' and method=='GET':return True,{'email':actor['email'],'manager':actor['manager'],'stages':STAGES,'modes':MODES,'outcomes':OUTCOMES}
+    if path=='/api/sales/access' and method=='GET':return True,{'email':actor['email'],'name':actor.get('name',actor['email']),'manager':actor['manager'],'auth_kind':actor.get('auth_kind','operator'),'must_change':bool(actor.get('must_change')),'stages':STAGES,'modes':MODES,'outcomes':OUTCOMES}
+    matched,result=sales_auth.change_password(app,h,c,actor,method,path)
+    if matched:return True,result
+    if actor.get('must_change'):
+        h.send(403,{'error':'Change your initial sales password before viewing enquiries.','password_change_required':True});return True,None
+    matched,result=sales_auth.manager_routes(app,h,c,actor,method,path)
+    if matched:return True,result
     if path=='/api/sales/team':
         if not actor['manager']:raise app.Problem('Not found.',404)
-        if method=='GET':return True,{'agents':[dict(r) for r in c.execute('SELECT g.account_id,g.active,a.email FROM sales_agent_grants g JOIN accounts a ON a.id=g.account_id ORDER BY a.email')]}
+        if method=='GET':return True,{'login_url':app.base_url()+'/sales/login','email_enabled':False,'agents':[dict(r) for r in c.execute('SELECT g.account_id,g.active,a.email,s.name,s.version,s.must_change FROM sales_agent_grants g JOIN accounts a ON a.id=g.account_id LEFT JOIN sales_staff_credentials s ON s.account_id=g.account_id ORDER BY a.email')]}
         if method=='POST':
             d=h.body();reason=app.text(d.get('reason'),1000)
             if len(reason)<10 or type(d.get('active'))!=bool:raise app.Problem('Enter a reason and valid access state.')
             account=c.execute('SELECT id,email FROM accounts WHERE LOWER(email)=? AND disabled IS NULL',(app.text(d.get('email'),254).lower(),)).fetchone()
-            if not account:raise app.Problem('Ask this colleague to create a HUDDLE account first. No invitation email is sent.')
+            if not account:raise app.Problem('Use Create sales colleague to set up this internal login.')
             c.execute('INSERT INTO sales_agent_grants VALUES(?,?,?,?) ON CONFLICT(account_id) DO UPDATE SET active=excluded.active,granted_by=excluded.granted_by',(account['id'],int(d['active']),app.now(),actor['id']))
+            if not d['active']:c.execute('DELETE FROM sales_staff_sessions WHERE account_id=?',(account['id'],))
             platform_admin.audit(app,c,actor['id'],'sales.agent_access',reason=reason,details={'account':account['id'],'email':account['email'],'active':d['active']})
             return True,{'ok':True}
     if path in ('/api/sales/enquiries','/api/sales/export') and method=='GET':
