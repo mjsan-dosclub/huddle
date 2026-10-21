@@ -15,7 +15,8 @@ try:
         c.execute('SELECT 1 FROM organizations LIMIT 1')
         c.execute('SELECT 1 FROM rate_limits LIMIT 1')
         c.execute('SELECT plan_id FROM pricing_offers LIMIT 1')
-        c.execute('SELECT details FROM enterprise_quote_requests LIMIT 1')
+        c.execute('SELECT details,stage,version FROM enterprise_quote_requests LIMIT 1')
+        c.execute('SELECT id FROM sales_enquiry_events LIMIT 1')
         role=c.execute('SELECT current_user').fetchone()[0]
         if role!='huddle_backend':raise RuntimeError('Use the dedicated huddle_backend role, not the project admin')
     print(json.dumps({'ready':True,'database':'connected','runtime_role':'huddle_backend'}))

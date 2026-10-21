@@ -325,6 +325,9 @@ class Handler(BaseHTTPRequestHandler):
             if self._pending_response is not None:self.send(*self._pending_response)
     def query(self):return urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
     def route(self,c,method,path):
+        import sales
+        matched,result=sales.routes(sys.modules[__name__],self,c,method,path)
+        if matched:return result
         matched,result=platform_admin.route(sys.modules[__name__],self,c,method,path)
         if matched:return result
         matched,result=billing.routes(sys.modules[__name__],self,c,method,path)

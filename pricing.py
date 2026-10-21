@@ -93,4 +93,6 @@ def request_quote(app, h, c):
     request_id=app.uid()
     c.execute('INSERT INTO enterprise_quote_requests(id,name,email,company,seats,message,consent_version,created,details) VALUES(?,?,?,?,?,?,?,?,?)',
               (request_id,name,email,company,seats,app.text(data.get('message'),2000),CONSENT_VERSION,app.now(),json.dumps(details)))
+    import sales
+    sales.record(app,c,request_id,None,'received','new','Enquiry received')
     return {'ok':True,'reference':request_id}
