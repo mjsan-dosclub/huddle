@@ -28,7 +28,12 @@ class SalesStaffAuthTests(unittest.TestCase):
         self.assertEqual(staff.get('/api/platform/prices').status_code,404)
         self.assertEqual(staff.post('/api/sales/team/provision',json={}).status_code,404)
         self.assertEqual(web.test_client().get('/sales').status_code,302)
-        self.assertEqual(web.test_client().get('/sales/login').status_code,200)
+        login=web.test_client().get('/sales/login')
+        self.assertEqual(login.status_code,200)
+        for css in ('app.css','workspace-theme.css','platform.css','sales.css'):
+            self.assertIn(('/static/'+css).encode(),login.data)
+        self.assertEqual(web.test_client().get('/sales/playbook').status_code,302)
+        self.assertEqual(staff.get('/sales/playbook').status_code,200)
         bad=web.test_client().post('/api/sales/auth/login',json={'email':address,'password':'wrong'});self.assertEqual(bad.status_code,401)
         self.assertEqual(web.test_client().post('/api/login',json={'email':address,'password':'InitialSales!2026'}).status_code,401)
         item={'name':'Meera','email':'buyer@example.com','company':'Malabar','seats':25,'consent':True}
