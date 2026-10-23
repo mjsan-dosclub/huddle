@@ -44,7 +44,7 @@ def serve(app,h,c,method,path):
         slug=public_urls.decode(app,path[len('/manifest/'):-12]);card=app.public_card(c,slug);slug=card['slug']
         prefix='/' if card_host(h) else '/c/'
         h.send(200,{'name':'HUDDLE digital card','short_name':'HUDDLE','id':prefix+slug,'start_url':prefix+slug,'scope':prefix,'display':'standalone','theme_color':'#164e40','background_color':'#f7f8f4','icons':[{'src':'/static/huddle-icon-192.png','sizes':'192x192','type':'image/png','purpose':'any'},{'src':'/static/huddle-icon-512.png','sizes':'512x512','type':'image/png','purpose':'any maskable'}]},'application/manifest+json');return True,None
-    if path in ('/','/pricing','/templates','/features','/enterprise','/nfc-cards') and not app_host(h):return document(app,h,'marketing.html')
+    if path in ('/','/pricing','/templates','/features','/enterprise','/nfc-cards','/how-it-works') and not app_host(h):return document(app,h,'marketing.html')
     if not app_host(h) and (path=='/dashboard' or path.startswith('/dashboard/')):
         h.send(302,b'','text/plain',{'Location':'/app'+path});return True,None
     if app_host(h) and path=='/':
