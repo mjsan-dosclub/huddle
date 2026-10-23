@@ -142,6 +142,8 @@ A timeline note does not notify a teammate. Make the handover through the agreed
 
 Can the next colleague see what the person needed, what actually happened, who owns the next action and when the customer expects an update? If yes, the record is useful. If not, add the missing sentence.
 
-## Suggested next discussion
+## Your team’s working agreements
 
-Confirm staffed hours, the escalation owner and a shared business communication channel. A future support-ticket module should add a genuine Resolved state, categories, ownership, customer-visible replies and reminders. Until then, this SOP uses only the existing sales workspace plus manual communication; it does not claim those features exist.
+Confirm staffed hours, the escalation owner and the approved business communication channel with your team lead. Use the current sales workspace to record activity and follow-ups; send replies through that agreed channel. If a request needs a separate support process, ask your lead how to hand it over.
+
+Content maintenance: run `python scripts/build_support_playbook.py` after editing this SOP to update the in-app Team playbook.
