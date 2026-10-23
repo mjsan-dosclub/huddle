@@ -30,7 +30,7 @@
 .sales-date-presets{margin:14px 0 8px}
 .sales-calendar-head{margin:10px 0 8px}
 .sales-calendar-weekday{padding:4px 0}
-.sales-calendar-grid button{height:34px;aspect-ratio:auto}
+.sales-calendar-grid button{width:34px;height:34px;aspect-ratio:1;justify-self:center}
 .sales-time-controls{margin-top:10px;padding-top:10px}
 .sales-date-dialog-actions{position:sticky;bottom:-20px;background:#fff;padding:12px 0 0;margin-top:10px}
-@media(max-height:620px){.sales-date-dialog{padding:14px}.sales-calendar-grid button{height:28px}.sales-date-dialog-actions{bottom:-14px}}
+@media(max-height:620px){.sales-date-dialog{padding:14px}.sales-calendar-grid button{width:28px;height:28px}.sales-date-dialog-actions{bottom:-14px}}
