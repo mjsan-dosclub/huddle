@@ -6,7 +6,7 @@ The console shares the logged-in HUDDLE fonts and colour tokens. A light cream/p
 
 - `/super-admin`: business overview; calculation notes are collapsed.
 - `/super-admin/organizations`: searchable, paginated organization table.
-- `/super-admin/organizations/:id`: dedicated management page with Overview, Access & package, Billing and Support sections.
+- `/super-admin/organizations/:id`: dedicated management page with Overview, People, Access & package, Billing, Settings and Support sections. People can reset an active customer's account password manually, generate one to copy, or email a one-time recovery link when email delivery is configured. Settings can rename or archive an organization; archive retains its records and can be reversed. Active billing and platform-admin memberships block archival.
 - `/super-admin/packages`: compact package table.
 - `/super-admin/packages/:id`: General, Usage limits and Features tabs. Switching tabs keeps entered values; hidden invalid fields are revealed before validation feedback. Package version checks remain enforced.
 - `/super-admin/pricing`: billing prices; creation and availability editing use dedicated pages. Fractional INR values are preserved.
@@ -18,4 +18,4 @@ Audit events record the actor, action, organization, reason and time. The API no
 
 ## Safety and verification
 
-Platform grants, independent MFA, session duration, support read-only restrictions and tenant boundaries are unchanged. No database migration is needed. All edits during browser QA used an isolated sample database; no customer package, price, payment or access was changed. Browser QA covered navigation, direct links, browser Back, package tabs/save, access grants, audit search/diffs, fractional price creation/retirement, support inspection/closure, desktop and 390px layouts.
+Platform grants, independent MFA, session duration, support read-only restrictions and tenant boundaries remain in place. Customer password changes revoke existing sessions across organizations; platform accounts cannot be reset from an organization page. One-time emailed links expire after 30 minutes and are stored only as hashes. Migration 10 adds their token table. Archiving blocks workspace access but preserves billing and audit records.

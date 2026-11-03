@@ -1,0 +1,10 @@
+SET LOCAL search_path TO huddle, pg_catalog;
+CREATE TABLE customer_password_resets(token_hash TEXT PRIMARY KEY,account_id TEXT NOT NULL REFERENCES accounts(id),created INTEGER NOT NULL,expires INTEGER NOT NULL,used INTEGER);
+CREATE INDEX customer_password_resets_account ON customer_password_resets(account_id);
+INSERT INTO schema_migrations VALUES(10,CAST(EXTRACT(EPOCH FROM NOW()) AS BIGINT));
+ALTER TABLE customer_password_resets ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON customer_password_resets FROM PUBLIC;
+CREATE POLICY backend_only ON customer_password_resets TO huddle_backend USING(TRUE) WITH CHECK(TRUE);
+GRANT SELECT,INSERT ON customer_password_resets TO huddle_backend;
+GRANT UPDATE(used) ON customer_password_resets TO huddle_backend;
+GRANT UPDATE(name,data,status) ON organizations TO huddle_backend;

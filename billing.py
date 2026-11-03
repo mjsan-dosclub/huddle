@@ -27,7 +27,7 @@ def organization_capacity(app,c,account_id,enforce=False):
     # Serialize creation for this account as well as the tenant's own quotas.
     # Only owned organizations contribute access; an invitation never lends a plan.
     if enforce:c.execute('UPDATE accounts SET disabled=disabled WHERE id=?',(account_id,))
-    owned=c.execute("SELECT DISTINCT o.id,o.status,u.active FROM organizations o JOIN users u ON u.tenant_id=o.id WHERE u.account_id=? AND u.role='owner'",(account_id,)).fetchall()
+    owned=c.execute("SELECT DISTINCT o.id,o.status,u.active FROM organizations o JOIN users u ON u.tenant_id=o.id WHERE u.account_id=? AND u.role='owner' AND o.status<>'archived'",(account_id,)).fetchall()
     limit=plan(c,'free')['entitlements'].get('max_owned_organizations',0);source='free'
     for org in owned:
         if org['status']!='active' or not org['active']:continue
