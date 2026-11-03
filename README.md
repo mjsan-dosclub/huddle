@@ -12,7 +12,7 @@ HUDDLE helps individuals and teams share their identity through a link, QR code 
 - **Manage your team:** Organize divisions, invite members in bulk and keep branding consistent with approved templates and field controls.
 - **Keep connections:** Capture contact exchanges with consent, review networking activity and export leads on eligible plans.
 - **Use NFC:** Assign, reassign or deactivate card links; write and verify compatible tags with the native Android admin app.
-- **Run the platform:** Manage organizations, packages, usage limits, pricing and human-readable audit history from Super Admin.
+- **Run the platform:** Manage organizations, customer account recovery, packages, usage limits, pricing and human-readable audit history from Super Admin.
 
 Organizations have separate data and Owner, Admin and Member permissions. Plan features and limits are managed centrally.
 
