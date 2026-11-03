@@ -196,8 +196,16 @@ def route(app,h,c,method,path):
         if method=='DELETE':c.execute('UPDATE support_sessions SET ended=? WHERE id=?',(app.now(),sid));audit(app,c,aid,'support.ended',s['tenant_id'],s['reason']);return True,{'ok':True}
         if method=='GET':
             audit(app,c,aid,'support.viewed',s['tenant_id'],s['reason'])
-            # Deliberately excludes contact contents, secrets and invitation bearer links.
-            return True,{'read_only':True,'tenant':tenant_detail(app,c,s['tenant_id']),'members':[{'id':r['id'],'role':r['role'],'active':r['active'],'name':json.loads(r['data']).get('name','')} for r in c.execute('SELECT id,role,active,data FROM users WHERE tenant_id=?',(s['tenant_id'],))]}
+            # Workspace preview metadata only: never return contact contents, secrets or invitation links.
+            members=[{'id':r['id'],'role':r['role'],'active':bool(r['active']),'name':json.loads(r['data']).get('name','')} for r in c.execute('SELECT id,role,active,data FROM users WHERE tenant_id=? ORDER BY created',(s['tenant_id'],))]
+            cards=[{'id':r['id'],'name':json.loads(r['data']).get('name',''),'persona':r['persona'],'active':bool(r['active']),'updated':r['updated']} for r in c.execute('SELECT cards.id,cards.persona,cards.active,cards.updated,users.data FROM cards JOIN users ON users.id=cards.user_id AND users.tenant_id=cards.tenant_id WHERE cards.tenant_id=? ORDER BY cards.updated DESC',(s['tenant_id'],))]
+            templates=[{'name':r['name'],'enabled':bool(json.loads(r['data']).get('enabled',True))} for r in c.execute('SELECT name,data FROM templates WHERE tenant_id=? ORDER BY created',(s['tenant_id'],))]
+            divisions=[r['name'] for r in c.execute('SELECT name FROM divisions WHERE tenant_id=? ORDER BY created',(s['tenant_id'],))]
+            detail=tenant_detail(app,c,s['tenant_id']);plan=detail['billing']
+            tenant={'id':detail['id'],'name':detail['name'],'status':detail['status'],'leads_count':detail['leads_count'],
+                'billing':{key:plan[key] for key in ('name','source','usage','entitlements')}}
+            return True,{'read_only':True,'expires':s['expires'],'tenant':tenant,'members':members,'cards':cards,'templates':templates,'divisions':divisions,
+                'pending_invitations':c.execute("SELECT count(*) FROM invitations WHERE tenant_id=? AND status='pending' AND expires>?",(s['tenant_id'],app.now())).fetchone()[0]}
         raise app.Problem('Read-only support session.',405)
     match=re.fullmatch(r'/api/platform/tenants/([a-zA-Z0-9-]+)(?:/(status|override|reconcile|offline-payment|rename|archive|restore|members/([a-zA-Z0-9-]+)/password))?',path)
     if match:

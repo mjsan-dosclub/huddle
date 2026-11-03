@@ -322,8 +322,16 @@ class MonetizationTests(unittest.TestCase):
         r=self.client.post(url+'/override',json={'plan_id':'enterprise','days':30,'limits':{'max_cards':25},'reason':'Offline enterprise access'});self.assertEqual(r.status_code,200,r.json)
         self.assertEqual(self.other.get('/api/billing').json['entitlements']['max_cards'],25)
         s=self.client.post('/api/platform/support',json={'tenant_id':target,'reason':'Investigate reported issue'}).json
-        self.assertTrue(self.client.get('/api/platform/support/'+s['id']).json['read_only']);self.assertEqual(self.client.put('/api/platform/support/'+s['id'],json={}).status_code,405)
+        view=self.client.get('/api/platform/support/'+s['id']).json
+        self.assertTrue(view['read_only']);self.assertEqual(view['tenant']['id'],target)
+        self.assertGreater(view['expires'],app.now());self.assertTrue(view['cards']);self.assertTrue(view['templates'])
+        self.assertNotIn('payments',view['tenant']['billing']);self.assertNotIn('email',view['members'][0])
+        self.assertEqual(self.client.get('/super-admin/client-view/'+s['id']).status_code,200)
+        self.assertEqual(self.client.put('/api/platform/support/'+s['id'],json={}).status_code,405)
         self.assertEqual(self.other.get('/api/platform/support/'+s['id']).status_code,404)
+        self.assertEqual(self.other.get('/super-admin/client-view/'+s['id']).status_code,404)
+        self.assertEqual(self.client.delete('/api/platform/support/'+s['id'],json={}).status_code,200)
+        self.assertEqual(self.client.get('/api/platform/support/'+s['id']).status_code,404)
         self.assertEqual(self.client.post(url+'/status',json={'status':'suspended','reason':'Requested account suspension'}).status_code,200)
         self.assertEqual(self.other.get('/api/state').status_code,401);self.assertEqual(self.other.get('/api/card/'+self.otherstate['user']['slug']).status_code,404)
         self.client.post(url+'/status',json={'status':'active','reason':'Restore verified workspace'});self.assertEqual(self.other.get('/api/state').status_code,200)
